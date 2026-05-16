@@ -7,6 +7,7 @@
   --graphite: #1c1f24;
   --electric-blue: #00f2ff;
   --electric-blue-glow: 0 0 16px 2px #00eaff99;
+  --teal: #00f2ff;
   --gold: #d4af37;
   --gold-glow: 0 0 25px rgba(212, 175, 55, 0.3);
   --gold-gradient: linear-gradient(135deg, #f5d17e 0%, #d4af37 50%, #b8860b 100%);
@@ -34,6 +35,14 @@ body, html, #root {
   overflow-x: hidden;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
+}
+
+/* Override index.css root constraints that cause blank side panels */
+#root {
+  width: 100%;
+  max-width: 100%;
+  text-align: left;
+  border-inline: none;
 }
 
 .dashboard.institutional-bg {
@@ -118,6 +127,7 @@ body, html, #root {
 .terminal-container {
   display: grid;
   grid-template-columns: 1fr 320px;
+  align-items: start;
   width: 100%;
   max-width: var(--max-width);
   gap: 2rem;
@@ -128,31 +138,35 @@ body, html, #root {
 .terminal-main {
   display: flex;
   flex-direction: column;
+  min-width: 0;
+  position: relative;
+  z-index: 1;
 }
 
 /* Sidebar */
 .right-sidebar {
   display: flex;
   flex-direction: column;
-  gap: 2rem;
+  gap: 0.75rem;
   position: sticky;
   top: 100px;
-  height: calc(100vh - 120px);
+  max-height: calc(100vh - 120px);
   overflow-y: auto;
+  z-index: 0;
 }
 
 .sidebar-section {
   background: var(--matte-black-2);
-  padding: 1.5rem;
+  padding: 0.9rem 1rem;
   border: 1px solid #222;
   border-radius: var(--border-radius);
 }
 
 .sidebar-label {
-  font-size: 0.65rem;
+  font-size: 0.62rem;
   color: #555;
   letter-spacing: 2px;
-  margin-bottom: 1.2rem;
+  margin-bottom: 0.7rem;
   font-weight: 900;
   text-transform: uppercase;
 }
@@ -167,8 +181,8 @@ body, html, #root {
   background: transparent;
   border: 1px solid #222;
   color: #666;
-  padding: 0.8rem 1rem;
-  font-size: 0.75rem;
+  padding: 0.45rem 0.75rem;
+  font-size: 0.72rem;
   font-weight: 700;
   text-align: left;
   cursor: pointer;
@@ -227,7 +241,7 @@ body, html, #root {
 /* Hero Section */
 .hero {
   width: 100%;
-  padding: 4rem 2rem;
+  padding: 1.2rem 2rem;
   box-sizing: border-box;
   display: flex;
   justify-content: center;
@@ -573,11 +587,14 @@ body, html, #root {
 @media (max-width: 1100px) {
   .terminal-container {
     grid-template-columns: 1fr;
+    align-items: stretch;
   }
   .right-sidebar {
     position: static;
+    max-height: none;
     height: auto;
     overflow-y: visible;
+    z-index: auto;
   }
 }
 
