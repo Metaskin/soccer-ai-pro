@@ -66,6 +66,78 @@ const NBA_ELITE_TEAMS = new Set([
 const BSKT_LIVE_ST = new Set(["Q1","Q2","Q3","Q4","OT","HT","BT"]);
 const BSKT_DONE_ST = new Set(["FT","AOT"]);
 
+// ─── BETKING INTEGRATION ──────────────────────────────────────────────────────
+
+const BETKING_SPORT_URL = (sport) =>
+  sport === "basketball"
+    ? "https://www.betking.com/sports/s/basketball/"
+    : "https://www.betking.com/sports/s/soccer/";
+
+// ─── PREDICTION TRACKER (localStorage) ───────────────────────────────────────
+
+const TRACKER_KEY = "stealth_preds_v3";
+
+const trLoad   = () => { try { return JSON.parse(localStorage.getItem(TRACKER_KEY)||"[]"); } catch { return []; } };
+const trSave   = (ps) => { try { localStorage.setItem(TRACKER_KEY, JSON.stringify(ps)); } catch {} };
+const trAdd    = (pred) => {
+  const ps = trLoad();
+  if (ps.find(p => p.id === pred.id)) return false;
+  ps.unshift(pred); if (ps.length > 300) ps.splice(300);
+  trSave(ps); return true;
+};
+const trUpdate = (id, upd) => {
+  const ps = trLoad(); const i = ps.findIndex(p => p.id === id);
+  if (i >= 0) { ps[i] = {...ps[i], ...upd}; trSave(ps); }
+};
+const trStats  = (ps) => {
+  const res  = ps.filter(p => p.status !== "pending");
+  const won  = res.filter(p => p.status === "won").length;
+  const lost = res.filter(p => p.status === "lost").length;
+  const rate = res.length > 0 ? Math.round(won / res.length * 100) : 0;
+  const byGrade = {};
+  ["A+","A","B","C","D"].forEach(g => {
+    const gp = res.filter(p => p.grade === g);
+    byGrade[g] = { t: gp.length, w: gp.filter(p => p.status === "won").length };
+  });
+  return { total: ps.length, won, lost, pending: ps.filter(p => p.status === "pending").length, rate, byGrade };
+};
+
+// Evaluate a pick string against a finished football result
+const evalFootballPick = (pick, homeTeam, awayTeam, hs, as_) => {
+  if (!pick) return "void";
+  const tot = hs + as_, homeWon = hs > as_, awayWon = as_ > hs, draw = hs === as_;
+  const p = pick;
+  if ((p.includes("Win")||p.includes(" ML")) && p.includes(homeTeam)) return homeWon?"won":"lost";
+  if ((p.includes("Win")||p.includes(" ML")) && p.includes(awayTeam)) return awayWon?"won":"lost";
+  if (p.includes("DNB") && p.includes(homeTeam)) return homeWon?"won":draw?"void":"lost";
+  if (p.includes("DNB") && p.includes(awayTeam)) return awayWon?"won":draw?"void":"lost";
+  if (p.includes("Double Chance")) return (homeWon||draw)?"won":"lost";
+  if (p.includes("BTTS Yes")) return (hs>0&&as_>0)?"won":"lost";
+  if (p.includes("Over 3.5")) return tot>3.5?"won":"lost";
+  if (p.includes("Over 2.5")) return tot>2.5?"won":"lost";
+  if (p.includes("Over 1.5")) return tot>1.5?"won":"lost";
+  if (p.includes("Under 2.5")) return tot<2.5?"won":"lost";
+  if (p.includes("AH") && p.includes(homeTeam)) {
+    const line = parseFloat(p.match(/-?\d+\.?\d*/)?.[0]||"0");
+    const adj = homeWon ? hs-as_ : -(as_-hs);
+    return adj+line>0?"won":adj+line===0?"void":"lost";
+  }
+  if (p.includes("AH") && p.includes(awayTeam)) {
+    const line = parseFloat(p.match(/-?\d+\.?\d*/)?.[0]||"0");
+    const adj = awayWon ? as_-hs : -(hs-as_);
+    return adj+line>0?"won":adj+line===0?"void":"lost";
+  }
+  return "void";
+};
+
+const evalBaskPick = (pick, homeTeam, awayTeam, hs, as_) => {
+  if (!pick || pick.includes("PICK'EM")) return "void";
+  const homeWon = hs > as_, awayWon = as_ > hs;
+  if (pick.includes(homeTeam)) return homeWon?"won":"lost";
+  if (pick.includes(awayTeam)) return awayWon?"won":"lost";
+  return "void";
+};
+
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
 
 const norm = (s) => (s || "").toLowerCase().trim();
@@ -313,6 +385,40 @@ const getStealthIntelligence = (match) => {
 
   const totalXG = homeXG + awayXG;
 
+  // ── 1st Half model (44% of full xG — early-game pace) ──
+  const hXG1 = adjustedHomeXG * 0.44, aXG1 = adjustedAwayXG * 0.44;
+  let hw1=0, d1=0, aw1=0, o05_1=0, o15_1=0, btts1=0;
+  for (let hg=0;hg<=5;hg++) for (let ag=0;ag<=5;ag++) {
+    const p1 = poisson(hXG1,hg)*poisson(aXG1,ag);
+    if (hg>ag)hw1+=p1; else if (hg===ag)d1+=p1; else aw1+=p1;
+    if (hg+ag>0.5)o05_1+=p1; if (hg+ag>1.5)o15_1+=p1; if (hg>0&&ag>0)btts1+=p1;
+  }
+  const s1=hw1+d1+aw1; hw1/=s1; d1/=s1; aw1/=s1;
+
+  // ── 2nd Half model (56% of full xG — late-game acceleration) ──
+  const hXG2 = adjustedHomeXG * 0.56, aXG2 = adjustedAwayXG * 0.56;
+  let hw2=0, d2=0, aw2=0, o05_2=0, o15_2=0;
+  for (let hg=0;hg<=5;hg++) for (let ag=0;ag<=5;ag++) {
+    const p2 = poisson(hXG2,hg)*poisson(aXG2,ag);
+    if (hg>ag)hw2+=p2; else if (hg===ag)d2+=p2; else aw2+=p2;
+    if (hg+ag>0.5)o05_2+=p2; if (hg+ag>1.5)o15_2+=p2;
+  }
+  const s2=hw2+d2+aw2; hw2/=s2; d2/=s2; aw2/=s2;
+
+  // ── Top correct scores (Poisson matrix) ──
+  const topScores = Object.entries(scoreProbs)
+    .sort((a,b)=>b[1]-a[1]).slice(0,6)
+    .map(([sc,p])=>({score:sc, prob:+(p*100).toFixed(1)}));
+
+  // ── Combo bets ──
+  const combos = [
+    { label:`${homeName} Win + Over 2.5`,  prob: Math.round(homeWin*over25*100) },
+    { label:`${awayName} Win + Over 2.5`,  prob: Math.round(awayWin*over25*100) },
+    { label:`BTTS + Over 2.5`,             prob: Math.round(btts*over25*100) },
+    { label:`${homeName} Win + BTTS Yes`,  prob: Math.round(homeWin*btts*100) },
+    { label:`Draw + Under 2.5`,            prob: Math.round(draw*(1-over25)*100) },
+  ].sort((a,b)=>b.prob-a.prob).slice(0,4);
+
   return {
     probs:    { home:homeProb, draw:drawProb, away:awayProb },
     xG:       { home:homeXG.toFixed(2), away:awayXG.toFixed(2) },
@@ -326,6 +432,17 @@ const getStealthIntelligence = (match) => {
       btts:    Math.round(btts*100),
       under25: Math.round((1-over25)*100),
     },
+    half1: {
+      homeProb:Math.round(hw1*100), drawProb:Math.round(d1*100), awayProb:Math.round(aw1*100),
+      over05:Math.round(o05_1*100), over15:Math.round(o15_1*100), btts:Math.round(btts1*100),
+      pick: hw1>0.50?`${homeName} 1H Win`:aw1>0.50?`${awayName} 1H Win`:`1H Over 0.5 Goals`,
+    },
+    half2: {
+      homeProb:Math.round(hw2*100), drawProb:Math.round(d2*100), awayProb:Math.round(aw2*100),
+      over05:Math.round(o05_2*100), over15:Math.round(o15_2*100),
+      pick: hw2>0.50?`${homeName} 2H Win`:aw2>0.50?`${awayName} 2H Win`:`2H Over 0.5 Goals`,
+    },
+    topScores, combos,
     score, grade, upsetRisk,
     volatility:  Math.abs(homeProb-awayProb)<12?"HIGH":"STABLE",
     isFeatured:  h.isBig||a.isBig,
@@ -341,6 +458,8 @@ const getStealthIntelligence = (match) => {
       { date:"2024-09", score:mlScore, winner:homeProb>=50?homeName:awayName },
     ],
     leagueXG,
+    // For tracker
+    homeTeam: homeName, awayTeam: awayName,
   };
 };
 
@@ -467,6 +586,27 @@ const getBasketballIntelligence = (game) => {
     records: { home:homeRecTotal, away:awayRecTotal, homeHome:hHome, awayRoad:aRoad },
     stars: { home:homeStar, away:awayStar },
     homeML, awayML, spreadLine, homeSpread, awaySpread,
+    // Quarter / half O/U projections (from Vegas total or estimated)
+    halves: overUnder ? {
+      h1OU:   (overUnder * 0.497).toFixed(1),
+      h2OU:   (overUnder * 0.503).toFixed(1),
+      q1OU:   (overUnder * 0.244).toFixed(1),
+      q2OU:   (overUnder * 0.253).toFixed(1),
+      q3OU:   (overUnder * 0.250).toFixed(1),
+      q4OU:   (overUnder * 0.253).toFixed(1),
+      h1Pick: homeProb>=awayProb ? `${homeName} 1H ML` : `${awayName} 1H ML`,
+      h2Pick: homeProb>=awayProb ? `${homeName} 2H ML` : `${awayName} 2H ML`,
+      q1Pick: homeProb>=awayProb ? `${homeName} Q1 ML` : `${awayName} Q1 ML`,
+      // Home teams typically score more in Q4 (familiarity with the basket / crowd)
+      q4Pick: homeProb>=awayProb ? `${homeName} Q4 ML` : `${awayName} Q4 ML`,
+    } : null,
+    // Combo picks
+    combos: [
+      { label:`${homeProb>=awayProb?homeName:awayName} ML + Over`, prob: Math.round(Math.max(homeProb,awayProb)/100 * 0.52 * 100) },
+      { label:`Under ${overUnder||estTotal} (Full Game)`,            prob: 48 },
+      { label: overUnder ? `1H Under ${(overUnder*0.497).toFixed(1)}` : "1H Under", prob: 51 },
+    ],
+    homeTeam: homeName, awayTeam: awayName,
   };
 };
 
@@ -613,6 +753,27 @@ const IBadge = ({text}) => {
   return <span style={{padding:"2px 6px",borderRadius:2,fontSize:"0.55rem",fontWeight:700,letterSpacing:1,textTransform:"uppercase",...s}}>{text}</span>;
 };
 
+// ─── BETKING BUTTON ───────────────────────────────────────────────────────────
+
+const BetKingBtn = ({sport="football", size="normal", style:sx={}}) => (
+  <a
+    href={BETKING_SPORT_URL(sport)}
+    target="_blank" rel="noopener noreferrer"
+    onClick={e=>e.stopPropagation()}
+    style={{
+      display:"inline-flex",alignItems:"center",gap:5,
+      padding: size==="sm" ? "3px 8px" : "0.55rem 1rem",
+      background:"linear-gradient(135deg,#00a651,#006b35)",
+      color:"#fff",borderRadius:3,textDecoration:"none",
+      fontSize: size==="sm" ? "0.52rem" : "0.62rem",
+      fontWeight:900,letterSpacing:.8,textTransform:"uppercase",
+      whiteSpace:"nowrap",flexShrink:0,
+      boxShadow:"0 2px 8px rgba(0,166,81,.25)",
+      ...sx
+    }}
+  >🎰 BETKING</a>
+);
+
 // ─── MATCH CARD ───────────────────────────────────────────────────────────────
 
 const MatchCard = React.memo(({match, featured=false, onClick}) => {
@@ -658,6 +819,9 @@ const MatchCard = React.memo(({match, featured=false, onClick}) => {
         </div>
         <div className="league-meta">
           {match?.league?.name}{country?<> · <span style={{color:"var(--teal)"}}>{country}</span></>:null}
+        </div>
+        <div style={{marginTop:"0.5rem"}}>
+          <BetKingBtn sport="football" size="sm" style={{width:"100%",justifyContent:"center"}}/>
         </div>
       </div>
 
@@ -747,10 +911,40 @@ const AnalysisPanel = ({match,onClose}) => {
       <div onClick={e=>e.stopPropagation()} style={{width:"100%",maxWidth:520,background:"#0d0f12",height:"100%",overflowY:"auto",borderLeft:"1px solid #222",padding:"2rem",boxSizing:"border-box"}}>
 
         {/* Header */}
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"1.5rem"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"0.8rem"}}>
           <StealthBadge text="INSTITUTIONAL ANALYSIS"/>
           <button onClick={onClose} style={{background:"none",border:"none",color:"#555",fontSize:"1.6rem",cursor:"pointer",lineHeight:1}}>×</button>
         </div>
+
+        {/* BetKing + Track row */}
+        {(() => {
+          const pred = {
+            id: `football_${match?.fixture?.id||Date.now()}`,
+            sport:"football", addedAt:new Date().toISOString(),
+            matchDate: match?.fixture?.date,
+            homeTeam: match?.teams?.home?.name, awayTeam: match?.teams?.away?.name,
+            league: match?.league?.name,
+            picks: { safePick:intel.safe, valuePick:intel.val, goalsPick:intel.goalsPick,
+              ahPick:intel.ah, mlScore:intel.mlScore, grade:intel.grade,
+              confidence:intel.score, homeProb:intel.probs.home, awayProb:intel.probs.away, drawProb:intel.probs.draw },
+            grade: intel.grade, status:"pending",
+          };
+          const [tracked,setTracked] = React.useState(()=>!!trLoad().find(p=>p.id===pred.id));
+          const track = () => { if(trAdd(pred)) setTracked(true); };
+          return (
+            <div style={{display:"flex",gap:8,marginBottom:"1.2rem"}}>
+              <BetKingBtn sport="football" style={{flex:1,justifyContent:"center"}}/>
+              <button onClick={track} style={{
+                flex:1, padding:"0.55rem 0.8rem", borderRadius:3, border:"1px solid",
+                borderColor:tracked?"#00a651":"#333",
+                background:tracked?"rgba(0,166,81,.1)":"transparent",
+                color:tracked?"#00a651":"#555",
+                fontSize:"0.6rem",fontWeight:900,letterSpacing:.8,cursor:tracked?"default":"pointer",
+                textTransform:"uppercase",
+              }}>{tracked?"✓ TRACKED":"+ TRACK PREDICTION"}</button>
+            </div>
+          );
+        })()}
 
         <p style={{fontSize:"0.58rem",color:"#444",letterSpacing:2,marginBottom:"0.4rem",fontWeight:900,textTransform:"uppercase"}}>
           {intel.metrics?.leagueCtx||match.league?.name} · {match.league?.country}
@@ -878,6 +1072,88 @@ const AnalysisPanel = ({match,onClose}) => {
           </div>
         ))}
 
+        {/* 1st Half */}
+        {intel.half1 && (
+          <>
+            <Sec title="1st Half Predictions"/>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:"0.5rem",marginBottom:"0.7rem"}}>
+              {[["HOME",intel.half1.homeProb,"var(--teal)"],["DRAW",intel.half1.drawProb,"#555"],["AWAY",intel.half1.awayProb,"var(--gold)"]].map(([l,v,c])=>(
+                <div key={l} style={{background:"#14171c",padding:"0.7rem",borderRadius:4,textAlign:"center"}}>
+                  <div style={{fontSize:"0.5rem",color:"#444",marginBottom:3,letterSpacing:2,fontWeight:900}}>{l}</div>
+                  <div style={{fontSize:"1.1rem",fontWeight:900,color:c}}>{v}%</div>
+                </div>
+              ))}
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:"0.4rem",marginBottom:"0.5rem"}}>
+              {[["1H O0.5",intel.half1.over05],["1H O1.5",intel.half1.over15],["1H BTTS",intel.half1.btts]].map(([l,v])=>(
+                <div key={l} style={{background:"#0f1114",padding:"0.5rem",borderRadius:3,textAlign:"center"}}>
+                  <div style={{fontSize:"0.5rem",color:"#444",marginBottom:2}}>{l}</div>
+                  <div style={{fontSize:"0.8rem",fontWeight:900,color:v>=60?"var(--teal)":"#666"}}>{v}%</div>
+                </div>
+              ))}
+            </div>
+            <div style={{padding:"0.5rem 0.8rem",background:"rgba(0,242,255,.04)",border:"1px solid rgba(0,242,255,.08)",borderRadius:3,fontSize:"0.6rem",color:"#aaa",marginBottom:"0.5rem"}}>
+              <span style={{color:"#555",fontSize:"0.52rem"}}>1H PICK: </span>
+              <strong style={{color:"var(--teal)"}}>{intel.half1.pick}</strong>
+            </div>
+          </>
+        )}
+
+        {/* 2nd Half */}
+        {intel.half2 && (
+          <>
+            <Sec title="2nd Half Predictions"/>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:"0.5rem",marginBottom:"0.7rem"}}>
+              {[["HOME",intel.half2.homeProb,"var(--teal)"],["DRAW",intel.half2.drawProb,"#555"],["AWAY",intel.half2.awayProb,"var(--gold)"]].map(([l,v,c])=>(
+                <div key={l} style={{background:"#14171c",padding:"0.7rem",borderRadius:4,textAlign:"center"}}>
+                  <div style={{fontSize:"0.5rem",color:"#444",marginBottom:3,letterSpacing:2,fontWeight:900}}>{l}</div>
+                  <div style={{fontSize:"1.1rem",fontWeight:900,color:c}}>{v}%</div>
+                </div>
+              ))}
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0.4rem",marginBottom:"0.5rem"}}>
+              {[["2H O0.5",intel.half2.over05],["2H O1.5",intel.half2.over15]].map(([l,v])=>(
+                <div key={l} style={{background:"#0f1114",padding:"0.5rem",borderRadius:3,textAlign:"center"}}>
+                  <div style={{fontSize:"0.5rem",color:"#444",marginBottom:2}}>{l}</div>
+                  <div style={{fontSize:"0.8rem",fontWeight:900,color:v>=60?"var(--gold)":"#666"}}>{v}%</div>
+                </div>
+              ))}
+            </div>
+            <div style={{padding:"0.5rem 0.8rem",background:"rgba(212,175,55,.04)",border:"1px solid rgba(212,175,55,.1)",borderRadius:3,fontSize:"0.6rem",color:"#aaa",marginBottom:"0.5rem"}}>
+              <span style={{color:"#555",fontSize:"0.52rem"}}>2H PICK: </span>
+              <strong style={{color:"var(--gold)"}}>{intel.half2.pick}</strong>
+            </div>
+          </>
+        )}
+
+        {/* Correct Scores */}
+        {intel.topScores?.length>0 && (
+          <>
+            <Sec title="Top Correct Score Probabilities"/>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:"0.4rem",marginBottom:"0.5rem"}}>
+              {intel.topScores.map(({score:sc,prob})=>(
+                <div key={sc} style={{background:"#14171c",padding:"0.6rem",borderRadius:3,textAlign:"center",border:"1px solid #1a1d23"}}>
+                  <div style={{fontSize:"0.9rem",fontWeight:900,color:"var(--teal)"}}>{sc}</div>
+                  <div style={{fontSize:"0.52rem",color:"#444",marginTop:2}}>{prob}%</div>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+
+        {/* Combo Bets */}
+        {intel.combos?.length>0 && (
+          <>
+            <Sec title="Smart Combo Bets"/>
+            {intel.combos.map(({label,prob})=>(
+              <div key={label} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"0.65rem 0",borderBottom:"1px solid #111"}}>
+                <span style={{fontSize:"0.68rem",color:"#aaa"}}>{label}</span>
+                <span style={{fontSize:"0.72rem",fontWeight:900,color:prob>=30?"var(--gold)":"#555"}}>{prob}%</span>
+              </div>
+            ))}
+          </>
+        )}
+
       </div>
     </div>
   );
@@ -943,10 +1219,40 @@ const BasketballAnalysisPanel = ({ gameObj, onClose }) => {
       <div onClick={e=>e.stopPropagation()} style={{width:"100%",maxWidth:520,background:"#0d0f12",height:"100%",overflowY:"auto",borderLeft:"1px solid #222",padding:"2rem",boxSizing:"border-box"}}>
 
         {/* Header */}
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"1.5rem"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"0.8rem"}}>
           <StealthBadge text={intel.trust}/>
           <button onClick={onClose} style={{background:"none",border:"none",color:"#555",fontSize:"1.6rem",cursor:"pointer",lineHeight:1}}>×</button>
         </div>
+
+        {/* BetKing + Track row */}
+        {(() => {
+          const bsktSport = isEspn ? (game._league==="WNBA"?"basketball":"basketball") : "basketball";
+          const pred = {
+            id: `bskt_${game.id||game.date||Date.now()}`,
+            sport:"basketball", addedAt:new Date().toISOString(),
+            matchDate: game.date,
+            homeTeam: intel.homeName, awayTeam: intel.awayName,
+            league: leagueTag,
+            picks: { safePick:intel.safePick, ouLabel:intel.ouLabel, grade:intel.grade,
+              confidence:intel.score, homeProb:intel.homeProb, awayProb:intel.awayProb },
+            grade: intel.grade, status:"pending",
+          };
+          const [tracked,setTracked] = React.useState(()=>!!trLoad().find(p=>p.id===pred.id));
+          const track = () => { if(trAdd(pred)) setTracked(true); };
+          return (
+            <div style={{display:"flex",gap:8,marginBottom:"1.2rem"}}>
+              <BetKingBtn sport={bsktSport} style={{flex:1,justifyContent:"center"}}/>
+              <button onClick={track} style={{
+                flex:1, padding:"0.55rem 0.8rem", borderRadius:3, border:"1px solid",
+                borderColor:tracked?"#00a651":"#333",
+                background:tracked?"rgba(0,166,81,.1)":"transparent",
+                color:tracked?"#00a651":"#555",
+                fontSize:"0.6rem",fontWeight:900,letterSpacing:.8,cursor:tracked?"default":"pointer",
+                textTransform:"uppercase",
+              }}>{tracked?"✓ TRACKED":"+ TRACK PREDICTION"}</button>
+            </div>
+          );
+        })()}
 
         {/* League */}
         <p style={{fontSize:"0.6rem",color:"#555",letterSpacing:2,marginBottom:"0.5rem",fontWeight:900,textTransform:"uppercase"}}>
@@ -1137,6 +1443,47 @@ const BasketballAnalysisPanel = ({ gameObj, onClose }) => {
           </div>
         )}
 
+        {/* Quarter & Half O/U lines — ESPN games with Vegas total */}
+        {isEspn && intel.halves && !isFinal && (
+          <>
+            <p style={{fontSize:"0.6rem",color:"#444",letterSpacing:2,margin:"1.5rem 0 0.8rem",fontWeight:900}}>QUARTER / HALF PROJECTIONS</p>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:"0.5rem",marginBottom:"0.8rem"}}>
+              {[
+                {label:"1ST HALF O/U", val:intel.halves.h1OU, pick:intel.halves.h1Pick},
+                {label:"2ND HALF O/U", val:intel.halves.h2OU, pick:intel.halves.h2Pick},
+              ].map(({label,val,pick})=>(
+                <div key={label} style={{background:"#14171c",padding:"0.8rem",borderRadius:4}}>
+                  <div style={{fontSize:"0.5rem",color:"#444",fontWeight:900,letterSpacing:2,marginBottom:4}}>{label}</div>
+                  <div style={{fontSize:"1.05rem",fontWeight:900,color:"var(--teal)"}}>{val}</div>
+                  <div style={{fontSize:"0.52rem",color:"var(--gold)",marginTop:3}}>{pick}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:"0.4rem",marginBottom:"0.8rem"}}>
+              {[["Q1",intel.halves.q1OU,intel.halves.q1Pick],["Q2",intel.halves.q2OU],["Q3",intel.halves.q3OU],["Q4",intel.halves.q4OU,intel.halves.q4Pick]].map(([q,val,pick])=>(
+                <div key={q} style={{background:"#0f1114",padding:"0.6rem",borderRadius:3,textAlign:"center",border:"1px solid #1a1d23"}}>
+                  <div style={{fontSize:"0.52rem",color:"#444",fontWeight:900,marginBottom:3}}>{q} O/U</div>
+                  <div style={{fontSize:"0.85rem",fontWeight:900,color:"var(--teal)"}}>{val}</div>
+                  {pick&&<div style={{fontSize:"0.46rem",color:"#666",marginTop:2}}>{pick}</div>}
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+
+        {/* Combo bets */}
+        {intel.combos?.length>0 && !isFinal && (
+          <>
+            <p style={{fontSize:"0.6rem",color:"#444",letterSpacing:2,margin:"1.5rem 0 0.8rem",fontWeight:900}}>COMBO BETS</p>
+            {intel.combos.map(({label,prob})=>(
+              <div key={label} style={{display:"flex",justifyContent:"space-between",padding:"0.6rem 0",borderBottom:"1px solid #111"}}>
+                <span style={{fontSize:"0.68rem",color:"#aaa"}}>{label}</span>
+                <span style={{fontSize:"0.72rem",fontWeight:900,color:"var(--gold)"}}>{prob}%</span>
+              </div>
+            ))}
+          </>
+        )}
+
       </div>
     </div>
   );
@@ -1280,6 +1627,9 @@ const NBAGameCard = React.memo(({ game, onClick }) => {
             📺 {broadcast}
           </div>
         )}
+        <div style={{marginTop:"0.5rem"}}>
+          <BetKingBtn sport="basketball" size="sm" style={{width:"100%",justifyContent:"center"}}/>
+        </div>
       </div>
 
       <div className="match-insights" style={{ borderTop: "1px solid rgba(255,255,255,.05)", padding: "0.8rem" }}>
@@ -1449,6 +1799,9 @@ const GlobalBaskCard = React.memo(({ game, onClick }) => {
             <span>LIVE · {quarter}{timer ? ` · ${timer}` : ""}</span>
           </div>
         )}
+        <div style={{marginTop:"0.5rem"}}>
+          <BetKingBtn sport="basketball" size="sm" style={{width:"100%",justifyContent:"center"}}/>
+        </div>
       </div>
 
       {/* Quarter box-score (live/final) */}
@@ -1596,22 +1949,29 @@ const SearchBar = ({value,onChange,onClear}) => (
 
 // ─── NAVBAR ───────────────────────────────────────────────────────────────────
 
-const Navbar = ({onViewChange,activeView,searchValue,onSearchChange,onSearchClear}) => (
-  <nav className="navbar">
-    <div className="navbar-logo">
-      <span style={{color:"#fff",fontWeight:900,letterSpacing:2}}>STEALTH</span>
-      <span style={{color:"#d4af37",fontWeight:300}}>PREDICTION</span>
-    </div>
-    <div style={{flex:1,maxWidth:400}}>
-      <SearchBar value={searchValue} onChange={onSearchChange} onClear={onSearchClear}/>
-    </div>
-    <div className="navbar-actions">
-      <button className={`nav-btn${activeView==="live"?" active":""}`} onClick={()=>onViewChange("live")}>Opportunities</button>
-      <button className={`nav-btn secondary${activeView==="basketball"?" active":""}`} onClick={()=>onViewChange("basketball")}>🏀 Basketball</button>
-      <button className={`nav-btn secondary${activeView==="standings"?" active":""}`} onClick={()=>onViewChange("standings")}>League Table</button>
-    </div>
-  </nav>
-);
+const Navbar = ({onViewChange,activeView,searchValue,onSearchChange,onSearchClear,trackerCount,trackerRate}) => {
+  const pLabel = trackerCount>0 ? `📊 ${trackerCount>9?"9+":trackerCount}` : "📊";
+  return (
+    <nav className="navbar">
+      <div className="navbar-logo">
+        <span style={{color:"#fff",fontWeight:900,letterSpacing:2}}>STEALTH</span>
+        <span style={{color:"#d4af37",fontWeight:300}}>PREDICTION</span>
+      </div>
+      <div style={{flex:1,maxWidth:400}}>
+        <SearchBar value={searchValue} onChange={onSearchChange} onClear={onSearchClear}/>
+      </div>
+      <div className="navbar-actions">
+        <button className={`nav-btn${activeView==="live"?" active":""}`} onClick={()=>onViewChange("live")}>Opportunities</button>
+        <button className={`nav-btn secondary${activeView==="basketball"?" active":""}`} onClick={()=>onViewChange("basketball")}>🏀 Basketball</button>
+        <button className={`nav-btn secondary${activeView==="standings"?" active":""}`} onClick={()=>onViewChange("standings")}>League Table</button>
+        <button className={`nav-btn secondary${activeView==="tracker"?" active":""}`} onClick={()=>onViewChange("tracker")}
+          style={{borderColor:activeView==="tracker"?"#00a651":undefined,color:activeView==="tracker"?"#00a651":undefined,position:"relative"}}>
+          {pLabel}{trackerRate>0&&<span style={{fontSize:"0.5rem",color:"#00a651",marginLeft:4}}>{trackerRate}%</span>}
+        </button>
+      </div>
+    </nav>
+  );
+};
 
 // ─── STATS RIBBON ─────────────────────────────────────────────────────────────
 
@@ -1860,6 +2220,138 @@ const EmptyState = ({geo,filter,search,onReset}) => (
   </div>
 );
 
+// ─── TRACKER VIEW ─────────────────────────────────────────────────────────────
+
+const TrackerView = () => {
+  const [preds, setPreds] = React.useState(trLoad);
+  const stats = trStats(preds);
+
+  const refresh = () => setPreds(trLoad());
+  const remove  = (id) => { const ps = trLoad().filter(p=>p.id!==id); trSave(ps); setPreds(ps); };
+  const clearAll = () => { trSave([]); setPreds([]); };
+
+  const statusColor = (s) => s==="won"?"#00ff88":s==="lost"?"#ff4444":s==="pending"?"#555":"#333";
+  const statusLabel = (s) => s==="won"?"✓ WON":s==="lost"?"✗ LOST":s==="pending"?"⏳ PENDING":"VOID";
+
+  return (
+    <section className="section">
+      <h2 className="section-title premium-label">📊 PREDICTION TRACKER — AI PERFORMANCE RECORD</h2>
+
+      {/* Stats banner */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:"0.8rem",marginBottom:"2rem"}}>
+        {[
+          {label:"TRACKED",   val:stats.total,   color:"#fff"},
+          {label:"WON",       val:stats.won,     color:"#00ff88"},
+          {label:"LOST",      val:stats.lost,    color:"#ff4444"},
+          {label:"WIN RATE",  val:`${stats.rate}%`, color:stats.rate>=60?"#00ff88":stats.rate>=45?"var(--gold)":"#ff4444"},
+        ].map(({label,val,color})=>(
+          <div key={label} style={{background:"var(--matte-black-2)",border:"1px solid #222",borderRadius:4,padding:"1rem",textAlign:"center"}}>
+            <div style={{fontSize:"0.52rem",color:"#444",letterSpacing:2,fontWeight:900,marginBottom:4}}>{label}</div>
+            <div style={{fontSize:"1.5rem",fontWeight:900,color}}>{val}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Grade performance */}
+      {Object.values(stats.byGrade).some(v=>v.t>0) && (
+        <div style={{background:"var(--matte-black-2)",border:"1px solid #222",borderRadius:4,padding:"1rem",marginBottom:"2rem"}}>
+          <p style={{fontSize:"0.58rem",color:"#444",letterSpacing:2,fontWeight:900,marginBottom:"0.8rem"}}>GRADE ACCURACY (resolved predictions only)</p>
+          <div style={{display:"flex",gap:"1rem",flexWrap:"wrap"}}>
+            {["A+","A","B","C","D"].map(g=>{
+              const {t,w} = stats.byGrade[g]||{t:0,w:0};
+              if (t===0) return null;
+              const rate = Math.round(w/t*100);
+              return (
+                <div key={g} style={{display:"flex",flexDirection:"column",alignItems:"center",minWidth:48}}>
+                  <div style={{fontSize:"1.1rem",fontWeight:900,color:rate>=60?"#00ff88":rate>=45?"var(--gold)":"#ff4444"}}>{rate}%</div>
+                  <div style={{fontSize:"0.55rem",color:"#555"}}>GRADE {g}</div>
+                  <div style={{fontSize:"0.5rem",color:"#333"}}>{w}/{t}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Pending counter */}
+      {stats.pending>0&&(
+        <div style={{padding:"0.7rem 1rem",background:"rgba(0,242,255,.04)",border:"1px solid rgba(0,242,255,.1)",borderRadius:4,marginBottom:"1rem",fontSize:"0.65rem",color:"var(--teal)"}}>
+          ⏳ {stats.pending} prediction{stats.pending>1?"s":""} pending — results will update when matches finish and you refresh
+        </div>
+      )}
+
+      {/* Controls */}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"1rem"}}>
+        <p style={{fontSize:"0.6rem",color:"#444",letterSpacing:2,fontWeight:900}}>PREDICTION LOG ({preds.length})</p>
+        <div style={{display:"flex",gap:8}}>
+          <button onClick={refresh} style={{padding:"0.45rem 0.8rem",background:"transparent",border:"1px solid #333",color:"#666",cursor:"pointer",borderRadius:3,fontSize:"0.6rem",fontWeight:700}}>REFRESH</button>
+          {preds.length>0&&<button onClick={clearAll} style={{padding:"0.45rem 0.8rem",background:"transparent",border:"1px solid #ff4444",color:"#ff4444",cursor:"pointer",borderRadius:3,fontSize:"0.6rem",fontWeight:700}}>CLEAR ALL</button>}
+        </div>
+      </div>
+
+      {/* Empty state */}
+      {preds.length===0&&(
+        <div style={{padding:"4rem 2rem",textAlign:"center",border:"1px dashed #222",borderRadius:4,color:"#333"}}>
+          <p style={{fontSize:"1rem",marginBottom:"0.5rem"}}>No predictions tracked yet</p>
+          <p style={{fontSize:"0.7rem",color:"#2a2a2a"}}>Click "＋ TRACK PREDICTION" inside any match analysis panel to record picks here</p>
+        </div>
+      )}
+
+      {/* Prediction list */}
+      {preds.map(pred=>(
+        <div key={pred.id} style={{background:"var(--matte-black-2)",border:`1px solid ${statusColor(pred.status)}22`,borderRadius:4,padding:"1rem",marginBottom:"0.8rem",display:"grid",gridTemplateColumns:"1fr auto",gap:8,alignItems:"start"}}>
+          <div>
+            {/* Title row */}
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:"0.4rem",flexWrap:"wrap"}}>
+              <span style={{fontSize:"0.5rem",color:pred.sport==="football"?"var(--teal)":"#c084fc",border:`1px solid ${pred.sport==="football"?"var(--teal)":"#c084fc"}`,borderRadius:2,padding:"1px 5px",fontWeight:900}}>
+                {pred.sport==="football"?"⚽ FOOTBALL":"🏀 BSKT"}
+              </span>
+              <span style={{fontSize:"0.75rem",fontWeight:700,color:"#fff"}}>{pred.homeTeam} vs {pred.awayTeam}</span>
+              <span style={{fontSize:"0.52rem",padding:"2px 6px",borderRadius:2,fontWeight:900,background:`${statusColor(pred.status)}18`,color:statusColor(pred.status)}}>
+                {statusLabel(pred.status)}
+              </span>
+            </div>
+            {/* League + date */}
+            <div style={{fontSize:"0.55rem",color:"#333",marginBottom:"0.5rem"}}>
+              {pred.league} · {pred.matchDate?new Date(pred.matchDate).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"2-digit"}):"—"}
+              · Tracked {new Date(pred.addedAt).toLocaleDateString("en-GB",{day:"2-digit",month:"short"})}
+            </div>
+            {/* Picks */}
+            <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+              {[
+                {l:"SAFE",   v:pred.picks?.safePick,  c:"var(--teal)"},
+                {l:"GOALS",  v:pred.picks?.goalsPick, c:"#00ff88"},
+                {l:"AH",     v:pred.picks?.ahPick,    c:"#c084fc"},
+                {l:"O/U",    v:pred.picks?.ouLabel,   c:"var(--gold)"},
+              ].filter(x=>x.v).map(({l,v,c})=>(
+                <div key={l} style={{padding:"3px 7px",background:"#111",borderRadius:2}}>
+                  <span style={{fontSize:"0.48rem",color:"#333",fontWeight:900}}>{l}: </span>
+                  <span style={{fontSize:"0.55rem",color:c,fontWeight:700}}>{v}</span>
+                </div>
+              ))}
+              {pred.grade&&(
+                <div style={{padding:"3px 7px",background:"rgba(212,175,55,.08)",borderRadius:2}}>
+                  <span style={{fontSize:"0.48rem",color:"#555",fontWeight:900}}>GRADE: </span>
+                  <span style={{fontSize:"0.55rem",color:"var(--gold)",fontWeight:900}}>{pred.grade}</span>
+                </div>
+              )}
+            </div>
+            {/* Result if resolved */}
+            {pred.result&&(
+              <div style={{marginTop:"0.4rem",fontSize:"0.58rem",color:"#555"}}>
+                Result: <span style={{color:"#fff",fontWeight:700}}>{pred.result.homeScore}–{pred.result.awayScore}</span>
+                {pred.result.resolvedAt&&<span style={{marginLeft:8,color:"#333"}}>resolved {new Date(pred.result.resolvedAt).toLocaleDateString("en-GB",{day:"2-digit",month:"short"})}</span>}
+              </div>
+            )}
+          </div>
+          {/* Remove */}
+          <button onClick={()=>remove(pred.id)} style={{background:"transparent",border:"none",color:"#2a2a2a",cursor:"pointer",fontSize:"1rem",padding:"2px 6px"}}>×</button>
+        </div>
+      ))}
+    </section>
+  );
+};
+
 // ─── APP ──────────────────────────────────────────────────────────────────────
 
 function App(){
@@ -1871,6 +2363,7 @@ function App(){
   const [searchQuery,   setSearchQuery]   = useState("");
   const [selectedMatch,  setSelectedMatch]  = useState(null);
   const [selectedBsktGame, setSelectedBsktGame] = useState(null);
+  const [trackerPreds,  setTrackerPreds]  = useState(trLoad);
   const [basketball,     setBasketball]     = useState({loading:true,error:null,data:[]});
   const [globalGames,    setGlobalGames]    = useState({loading:true,error:null,data:[]});
   const [nbaFilter,      setNbaFilter]      = useState("All");
@@ -2120,6 +2613,43 @@ function App(){
     return () => { clearInterval(liveTid); clearInterval(fullTid); };
   }, [basketball.data, globalGames.data, fetchBasketball, fetchGlobalBasketball, fetchLiveScoresOnly]);
 
+  // ── Auto-resolve tracked predictions from live data ───────────────────────
+  useEffect(() => {
+    const pending = trLoad().filter(p => p.status === "pending");
+    if (pending.length === 0) return;
+    let changed = false;
+
+    pending.forEach(pred => {
+      if (pred.sport === "football") {
+        const fixtureId = pred.id.replace("football_","");
+        const match = live.data.find(m => String(m?.fixture?.id) === fixtureId);
+        if (!match) return;
+        const s = match?.fixture?.status?.short;
+        if (!DONE_STATUSES.has(s)) return; // not finished yet
+        const hs = match?.goals?.home ?? 0;
+        const as_ = match?.goals?.away ?? 0;
+        const r1 = evalFootballPick(pred.picks?.safePick||"",  pred.homeTeam, pred.awayTeam, hs, as_);
+        const r2 = evalFootballPick(pred.picks?.goalsPick||"", pred.homeTeam, pred.awayTeam, hs, as_);
+        const mainResult = r1!=="void" ? r1 : r2!=="void" ? r2 : "void";
+        trUpdate(pred.id, { status:mainResult, result:{ homeScore:hs, awayScore:as_, resolvedAt:new Date().toISOString() } });
+        changed = true;
+      }
+      if (pred.sport === "basketball") {
+        const gameId = pred.id.replace("bskt_","");
+        const g = basketball.data.find(g => String(g.id) === gameId);
+        if (!g || g.status?.type?.state !== "post") return;
+        const homeC = g.competitions?.[0]?.competitors?.find(c=>c.homeAway==="home");
+        const awayC = g.competitions?.[0]?.competitors?.find(c=>c.homeAway==="away");
+        const hs = parseInt(homeC?.score||"0"), as_ = parseInt(awayC?.score||"0");
+        const r = evalBaskPick(pred.picks?.safePick||"", pred.homeTeam, pred.awayTeam, hs, as_);
+        trUpdate(pred.id, { status:r, result:{ homeScore:hs, awayScore:as_, resolvedAt:new Date().toISOString() } });
+        changed = true;
+      }
+    });
+
+    if (changed) setTrackerPreds(trLoad());
+  }, [live.data, basketball.data]);
+
   // ── Filtered matches ───────────────────────────────────────────────────────
   const filteredMatches = useMemo(()=>{
     let data = Array.isArray(live.data) ? [...live.data] : [];
@@ -2229,7 +2759,8 @@ function App(){
         {selectedBsktGame&&<BasketballAnalysisPanel gameObj={selectedBsktGame} onClose={()=>setSelectedBsktGame(null)}/>}
 
         <Navbar onViewChange={setView} activeView={view}
-          searchValue={searchQuery} onSearchChange={setSearchQuery} onSearchClear={()=>setSearchQuery("")}/>
+          searchValue={searchQuery} onSearchChange={setSearchQuery} onSearchClear={()=>setSearchQuery("")}
+          trackerCount={trackerPreds.length} trackerRate={trStats(trackerPreds).rate}/>
 
         <StatsRibbon stats={stats} liveCount={liveCount}/>
 
@@ -2293,6 +2824,8 @@ function App(){
                 {standings.loading?<Spinner/>:<StandingsTable standings={standings.data}/>}
               </section>
             )}
+
+            {view==="tracker"&&<TrackerView/>}
 
             {view==="basketball"&&(
               <section className="section">
