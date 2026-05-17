@@ -2756,10 +2756,11 @@ function App(){
     let data = [...basketball.data];
     if     (nbaFilter==="NBA")       data = data.filter(g=>g._league==="NBA");
     else if(nbaFilter==="WNBA")      data = data.filter(g=>g._league==="WNBA");
-    else if(nbaFilter==="Live Games") data = data.filter(g=>g.status?.type?.state==="in");
+    else if(nbaFilter==="Live Games") { const f=data.filter(g=>g.status?.type?.state==="in");  data=f.length?f:data; }
     else if(nbaFilter==="Upcoming")   data = data.filter(g=>g.status?.type?.state==="pre");
     else if(nbaFilter==="Final")      data = data.filter(g=>g.status?.type?.state==="post");
-    else if(nbaFilter==="Featured")   data = data.filter(g=>getBasketballIntelligence(g)?.isFeatured);
+    else if(nbaFilter==="Featured")   { const f=data.filter(g=>getBasketballIntelligence(g)?.isFeatured); data=f.length?f:data; }
+    console.log(`🏀 filteredBasketball: ${data.length} (total:${basketball.data.length}, filter:${nbaFilter})`);
     return data;
   },[basketball.data,nbaFilter]);
 
@@ -2826,12 +2827,12 @@ function App(){
                   <>
                     <FeaturedSection
                       title="FEATURED BIG CLUB MATCHES"
-                      matches={filteredMatches.filter(m=>getStealthIntelligence(m)?.isFeatured).slice(0,6)}
+                      matches={filteredMatches.filter(m=>getStealthIntelligence(m)?.isFeatured).slice(0,3)}
                       onMatchClick={setSelectedMatch}
                     />
-                    <h2 className="section-title premium-label">● ALL OPPORTUNITIES</h2>
+                    <h2 className="section-title premium-label">● ALL OPPORTUNITIES ({filteredMatches.length})</h2>
                     <div className="cards-grid">
-                      {filteredMatches.filter(m=>!getStealthIntelligence(m)?.isFeatured).slice(0,60).map(m=>(
+                      {filteredMatches.slice(0,80).map(m=>(
                         <MatchCard key={m.fixture.id} match={m} onClick={setSelectedMatch}/>
                       ))}
                     </div>
@@ -3012,15 +3013,15 @@ function App(){
                       <>
                         <h2 className="section-title premium-label">● FEATURED MATCHUPS</h2>
                         <div className="cards-grid" style={{marginBottom:"3rem"}}>
-                          {filteredBasketball.filter(g=>getBasketballIntelligence(g)?.isFeatured).map(g=>(
+                          {filteredBasketball.filter(g=>getBasketballIntelligence(g)?.isFeatured).slice(0,4).map(g=>(
                             <NBAGameCard key={g.id} game={g} onClick={()=>setSelectedBsktGame({game:g,type:"espn"})}/>
                           ))}
                         </div>
                       </>
                     )}
-                    <h2 className="section-title premium-label">● NBA / WNBA GAMES</h2>
+                    <h2 className="section-title premium-label">● NBA / WNBA GAMES ({filteredBasketball.length})</h2>
                     <div className="cards-grid">
-                      {filteredBasketball.filter(g=>!getBasketballIntelligence(g)?.isFeatured).map(g=>(
+                      {filteredBasketball.map(g=>(
                         <NBAGameCard key={g.id} game={g} onClick={()=>setSelectedBsktGame({game:g,type:"espn"})}/>
                       ))}
                     </div>
