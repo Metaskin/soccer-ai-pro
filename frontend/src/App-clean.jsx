@@ -53,7 +53,11 @@ const TOP_CLUBS = [
   "Atletico Madrid","Borussia Dortmund","Ajax","Porto","Benfica","Celtic",
 ];
 
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:5050";
+// BACKEND_URL: set VITE_BACKEND_URL in Vercel → Frontend project → Settings → Environment Variables
+// Local dev: create frontend/.env with VITE_BACKEND_URL=http://localhost:5050
+const BACKEND_URL = (import.meta.env.VITE_BACKEND_URL || "http://localhost:5050").replace(/\/$/, "");
+const IS_VERCEL   = typeof window !== "undefined" && !window.location.hostname.includes("localhost") && !window.location.hostname.includes("127.0.0.1");
+const BACKEND_MISCONFIGURED = IS_VERCEL && BACKEND_URL.includes("localhost");
 
 const NBA_ELITE_TEAMS = new Set([
   "boston celtics","golden state warriors","milwaukee bucks","miami heat",
@@ -711,13 +715,13 @@ async function safeFetch(endpoint) {
   try {
     const url = `${BACKEND_URL}/api/football/proxy?endpoint=${encodeURIComponent(endpoint)}`;
     const res = await fetch(url);
-    if (res.status === 429) { console.warn("Rate limited:", endpoint); return []; }
-    if (!res.ok)             { console.warn(`HTTP ${res.status}:`, endpoint); return []; }
+    if (res.status === 429) { console.warn("⚠️ Rate limited:", endpoint); return []; }
+    if (!res.ok)             { console.warn(`⚠️ HTTP ${res.status}:`, endpoint); return null; }
     const d = await res.json();
     return d?.response || [];
   } catch (e) {
-    console.warn("safeFetch error:", endpoint, e.message);
-    return [];
+    console.warn("⚠️ safeFetch failed:", endpoint, e.message);
+    return null;           // null = network failure (vs [] = valid empty response)
   }
 }
 
@@ -2401,7 +2405,21 @@ function App(){
         ...leagueIds.map(id=>safeFetch(`/fixtures?league=${id}&season=${season}&next=20`)),
       ]);
 
-      const allRaw = results.flat();
+      // null = network failure; count how many calls actually failed
+      const failCount = results.filter(r => r === null).length;
+      const totalCalls = results.length;
+      console.log(`📡 Football fetch: ${totalCalls - failCount}/${totalCalls} calls succeeded`);
+
+      // If ALL calls failed → backend unreachable
+      if (failCount === totalCalls) {
+        const msg = BACKEND_MISCONFIGURED
+          ? "⚠️ Backend URL points to localhost but you're on a deployed site.\n\nFix: Vercel → Frontend project → Settings → Environment Variables → add VITE_BACKEND_URL = your backend Vercel URL → Redeploy."
+          : `Backend at "${BACKEND_URL}" is not responding. Check it's deployed and healthy.`;
+        throw new Error(msg);
+      }
+
+      // Flatten — skip null (failed) calls, treat them as empty
+      const allRaw = results.flatMap(r => r ?? []);
 
       // Deduplicate — live version wins
       const map = new Map();
@@ -2462,19 +2480,22 @@ function App(){
         return `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,"0")}${String(d.getDate()).padStart(2,"0")}`;
       });
 
-      // Fetch news + NBA (4 days) + WNBA (4 days) in parallel
-      const responses = await Promise.all([
-        fetch(`${BACKEND_URL}/api/basketball/news?limit=12`),
-        ...dates.map(date => fetch(`${BACKEND_URL}/api/basketball/scoreboard?dates=${date}`)),
-        ...dates.map(date => fetch(`${BACKEND_URL}/api/basketball/wnba/scoreboard?dates=${date}`)),
+      // Fetch all in parallel — each request is independently guarded
+      const safeGet = async (url) => {
+        try {
+          const r = await fetch(url);
+          return r.ok ? r.json() : {};
+        } catch { return {}; }
+      };
+
+      const [newsData, ...gameDatas] = await Promise.all([
+        safeGet(`${BACKEND_URL}/api/basketball/news?limit=12`),
+        ...dates.map(date => safeGet(`${BACKEND_URL}/api/basketball/scoreboard?dates=${date}`)),
+        ...dates.map(date => safeGet(`${BACKEND_URL}/api/basketball/wnba/scoreboard?dates=${date}`)),
       ]);
 
-      if (!responses[1].ok) throw new Error(`Server responded ${responses[1].status} — is the backend running on port 5050?`);
-
-      const jsons = await Promise.all(responses.map(r => r.ok ? r.json() : Promise.resolve({})));
-      const newsData  = jsons[0];
-      const nbaDatas  = jsons.slice(1, 5);   // indices 1–4
-      const wnbaDatas = jsons.slice(5, 9);   // indices 5–8
+      const nbaDatas  = gameDatas.slice(0, 4);
+      const wnbaDatas = gameDatas.slice(4, 8);
 
       const eventMap = new Map();
       nbaDatas.forEach(d  => (d.events||[]).forEach(e => { if (!eventMap.has(e.id))           eventMap.set(e.id,          { ...e, _league: "NBA"  }); }));
@@ -2486,9 +2507,19 @@ function App(){
         return sa!==sb?sa-sb:new Date(a.date)-new Date(b.date);
       });
 
+      console.log(`✅ ${events.length} basketball games loaded (${dates.length} days, NBA+WNBA)`);
+
+      // If we got zero events, backend is probably unreachable
+      if (events.length === 0) {
+        const errMsg = BACKEND_MISCONFIGURED
+          ? "Backend URL is localhost but app is deployed. Set VITE_BACKEND_URL in Vercel → Frontend → Settings → Environment Variables."
+          : "No basketball games returned. Backend may be unreachable.";
+        setBasketball({ loading:false, error:errMsg, data:[] });
+        return;
+      }
+
       setBasketball({ loading:false, error:null, data:events });
       setNbaNews(newsData.articles||newsData.items||[]);
-      console.log(`✅ ${events.length} basketball games loaded (${dates.length} days, NBA+WNBA)`);
     } catch (err) {
       console.error("fetchBasketball:", err);
       setBasketball({ loading:false, error:err.message, data:[] });
@@ -2688,7 +2719,7 @@ function App(){
       data = p.length ? p : data;
     }
     if(filter==="Value Picks"){
-      const p = data.filter(m=>{const i=getStealthIntelligence(m);return i&&i.score>70&&i.volatility==="HIGH";});
+      const p = data.filter(m=>{const i=getStealthIntelligence(m);return i&&i.score>65&&i.val&&i.val!==i.safe;});
       data = p.length ? p : data;
     }
     if(filter==="Goals Picks"){
@@ -2717,6 +2748,7 @@ function App(){
       return new Date(a.fixture?.date||0)-new Date(b.fixture?.date||0);
     });
 
+    console.log(`🔍 filteredMatches: ${data.length} (raw: ${live.data.length}, geo:${selectedGeo}, filter:${filter})`);
     return data;
   },[live.data,selectedGeo,searchQuery,filter]);
 
@@ -2776,7 +2808,13 @@ function App(){
                  live.error   ? (
                   <div style={{padding:"2rem",textAlign:"center",color:"#ff4444",border:"1px solid #ff4444",borderRadius:4}}>
                     <p style={{fontSize:"1.1rem",marginBottom:"1rem"}}>⚠️ Failed to load matches</p>
-                    <p style={{color:"#666",fontSize:"0.9rem",marginBottom:"1.5rem"}}>{live.error}</p>
+                    <p style={{color:"#666",fontSize:"0.85rem",marginBottom:"0.5rem",whiteSpace:"pre-wrap",textAlign:"left"}}>{live.error}</p>
+                    {BACKEND_MISCONFIGURED && (
+                      <p style={{color:"var(--teal)",fontSize:"0.72rem",margin:"0.5rem 0 1.5rem",lineHeight:1.6,textAlign:"left"}}>
+                        Fix: Vercel → Frontend project → Settings → Environment Variables<br/>
+                        Add <strong>VITE_BACKEND_URL</strong> = your backend Vercel URL → Redeploy
+                      </p>
+                    )}
                     <button onClick={fetchData}
                       style={{padding:"0.8rem 1.5rem",background:"var(--gold)",color:"#000",border:"none",cursor:"pointer",borderRadius:4,fontWeight:700}}>
                       Retry
@@ -2839,11 +2877,14 @@ function App(){
                 {basketball.loading ? <Spinner/> :
                  basketball.error ? (
                   <div style={{padding:"2rem",textAlign:"center",color:"#ff4444",border:"1px solid #ff4444",borderRadius:4}}>
-                    <p style={{fontSize:"1.1rem",marginBottom:"0.8rem"}}>⚠️ Failed to load NBA games</p>
-                    <p style={{color:"#666",fontSize:"0.85rem",marginBottom:"0.5rem"}}>{basketball.error}</p>
-                    <p style={{color:"#444",fontSize:"0.75rem",marginBottom:"1.5rem"}}>
-                      Make sure the backend is running: <code style={{color:"var(--teal)"}}>cd backend && node server.js</code>
-                    </p>
+                    <p style={{fontSize:"1.1rem",marginBottom:"0.8rem"}}>⚠️ Failed to load basketball games</p>
+                    <p style={{color:"#666",fontSize:"0.85rem",marginBottom:"0.5rem",whiteSpace:"pre-wrap"}}>{basketball.error}</p>
+                    {BACKEND_MISCONFIGURED && (
+                      <p style={{color:"var(--teal)",fontSize:"0.72rem",marginBottom:"1.5rem",lineHeight:1.6}}>
+                        Fix: Vercel → Frontend project → Settings → Environment Variables<br/>
+                        Add <strong>VITE_BACKEND_URL</strong> = your backend Vercel URL → Redeploy
+                      </p>
+                    )}
                     <button onClick={()=>{fetchBasketball();fetchGlobalBasketball();}}
                       style={{padding:"0.8rem 1.5rem",background:"var(--gold)",color:"#000",border:"none",cursor:"pointer",borderRadius:4,fontWeight:700}}>
                       Retry
