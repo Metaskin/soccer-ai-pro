@@ -595,11 +595,6 @@ body, html, #root {
     height: auto;
     overflow-y: visible;
     z-index: auto;
-    /* Sidebar appears ABOVE match cards on mobile */
-    order: 1;
-  }
-  .terminal-main {
-    order: 2;
   }
 }
 
@@ -896,6 +891,29 @@ body, html, #root {
   /* Swap short/full labels */
   .btn-label-full  { display: none !important; }
   .btn-label-short { display: inline !important; }
+}
+
+/* Mobile quick-filter strip — horizontal scroll row above match cards */
+.mobile-filter-strip {
+  display: none;
+}
+@media (max-width: 1100px) {
+  .mobile-filter-strip {
+    display: flex;
+    gap: 0.5rem;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: 0.5rem 0 0.6rem;
+    margin-bottom: 1rem;
+    scrollbar-width: none;
+  }
+  .mobile-filter-strip::-webkit-scrollbar { display: none; }
+  .mobile-filter-strip .filter-tag {
+    white-space: nowrap;
+    flex-shrink: 0;
+    padding: 0.45rem 0.85rem;
+    font-size: 0.68rem;
+  }
 }
 
 /* Touch-device BetKing card button — bigger tap target */

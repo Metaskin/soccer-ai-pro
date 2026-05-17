@@ -715,13 +715,18 @@ async function safeFetch(endpoint) {
   try {
     const url = `${BACKEND_URL}/api/football/proxy?endpoint=${encodeURIComponent(endpoint)}`;
     const res = await fetch(url);
-    if (res.status === 429) { console.warn("⚠️ Rate limited:", endpoint); return []; }
+    if (res.status === 429) { console.warn("⚠️ Rate limited:", endpoint); return null; }
     if (!res.ok)             { console.warn(`⚠️ HTTP ${res.status}:`, endpoint); return null; }
     const d = await res.json();
-    return d?.response || [];
+    // API-Sports returns HTTP 200 with errors:{} when the key is missing/invalid/exhausted
+    if (d?.errors && Object.keys(d.errors).length > 0) {
+      console.warn("⚠️ API-Sports error:", endpoint, d.errors);
+      return null;
+    }
+    return d?.response ?? [];
   } catch (e) {
     console.warn("⚠️ safeFetch failed:", endpoint, e.message);
-    return null;           // null = network failure (vs [] = valid empty response)
+    return null;
   }
 }
 
@@ -2405,16 +2410,19 @@ function App(){
         ...leagueIds.map(id=>safeFetch(`/fixtures?league=${id}&season=${season}&next=20`)),
       ]);
 
-      // null = network failure; count how many calls actually failed
+      // null = network/API failure; count how many calls actually failed
       const failCount = results.filter(r => r === null).length;
       const totalCalls = results.length;
       console.log(`📡 Football fetch: ${totalCalls - failCount}/${totalCalls} calls succeeded`);
 
-      // If ALL calls failed → backend unreachable
+      // If ALL calls failed → backend unreachable OR API key missing/exhausted
       if (failCount === totalCalls) {
-        const msg = BACKEND_MISCONFIGURED
-          ? "⚠️ Backend URL points to localhost but you're on a deployed site.\n\nFix: Vercel → Frontend project → Settings → Environment Variables → add VITE_BACKEND_URL = your backend Vercel URL → Redeploy."
-          : `Backend at "${BACKEND_URL}" is not responding. Check it's deployed and healthy.`;
+        let msg;
+        if (BACKEND_MISCONFIGURED) {
+          msg = "⚠️ Backend URL points to localhost but you're on a deployed site.\n\nFix: Vercel → Frontend project → Settings → Environment Variables → add VITE_BACKEND_URL = your backend Vercel URL → Redeploy.";
+        } else {
+          msg = `⚠️ No data received from the football API.\n\nPossible causes:\n1. API_SPORTS_KEY not set in Vercel backend env vars\n2. Daily API quota exhausted (free tier = 100 calls/day)\n3. Backend at "${BACKEND_URL}" is not responding\n\nFix: Vercel → Backend project → Settings → Environment Variables → add API_SPORTS_KEY → Redeploy.`;
+        }
         throw new Error(msg);
       }
 
@@ -2682,11 +2690,13 @@ function App(){
 
     // Strip youth/women/reserves (skip if user is explicitly searching)
     if(!searchQuery.trim()){
-      data = data.filter(m=>{
+      const stripped = data.filter(m=>{
         const n = norm(m?.league?.name);
         return !n.includes("u17")&&!n.includes("u18")&&!n.includes("u20")&&!n.includes("u21")&&
                !n.includes("women")&&!n.includes("reserve")&&!n.includes("friendly")&&!n.includes("youth");
       });
+      // Fallback: if stripping removes everything, show all (avoids false empty state)
+      data = stripped.length ? stripped : data;
     }
 
     // 1. Search
@@ -2805,6 +2815,12 @@ function App(){
 
             {view==="live"&&(
               <section className="section">
+                {/* Mobile-only quick-filter strip — replaces sidebar being above matches */}
+                <div className="mobile-filter-strip">
+                  {["All","Upcoming Games","Live Matches","Big Clubs","Safe Picks","Goals Picks","Value Picks","Upset Alerts"].map(f=>(
+                    <button key={f} className={`filter-tag${filter===f?" active":""}`} onClick={()=>setFilter(f)}>{f}</button>
+                  ))}
+                </div>
                 {live.loading ? <Spinner/> :
                  live.error   ? (
                   <div style={{padding:"2rem",textAlign:"center",color:"#ff4444",border:"1px solid #ff4444",borderRadius:4}}>
