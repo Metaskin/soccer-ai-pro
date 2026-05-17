@@ -6,7 +6,7 @@ import dotenv from "dotenv";
 dotenv.config();
 
 const app = express();
-app.use(cors());
+app.use(cors({ origin: "*" }));
 
 const FOOTBALL_API = "https://v3.football.api-sports.io";
 const HEADERS = () => ({ "x-apisports-key": process.env.API_SPORTS_KEY });
@@ -178,7 +178,10 @@ app.get("/api/sports/news", async (req, res) => {
   }
 });
 
-const PORT = process.env.PORT || 5050;
-app.listen(PORT, () => {
-  console.log(`STEALTH FOOTBALL PROXY RUNNING ON ${PORT}`);
-});
+// Local dev: listen on port. Vercel serverless: export app as default.
+if (process.env.NODE_ENV !== "production") {
+  const PORT = process.env.PORT || 5050;
+  app.listen(PORT, () => console.log(`STEALTH FOOTBALL PROXY RUNNING ON ${PORT}`));
+}
+
+export default app;

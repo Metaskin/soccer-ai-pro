@@ -53,7 +53,7 @@ const TOP_CLUBS = [
   "Atletico Madrid","Borussia Dortmund","Ajax","Porto","Benfica","Celtic",
 ];
 
-const BACKEND_URL = "http://localhost:5050";
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:5050";
 
 const NBA_ELITE_TEAMS = new Set([
   "boston celtics","golden state warriors","milwaukee bucks","miami heat",
