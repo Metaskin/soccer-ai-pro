@@ -68,12 +68,7 @@ const BSKT_DONE_ST = new Set(["FT","AOT"]);
 
 // ─── BETKING INTEGRATION ──────────────────────────────────────────────────────
 
-const BETKING_BASE = "https://m.betking.com/en-ng";
-
-const BETKING_SPORT_URL = (sport) =>
-  sport === "basketball"
-    ? `${BETKING_BASE}/sports/s/basketball/`
-    : `${BETKING_BASE}/sports/s/soccer/`;
+const BETKING_URL = "https://m.betking.com/en-ng";
 
 // ─── PREDICTION TRACKER (localStorage) ───────────────────────────────────────
 
@@ -757,14 +752,14 @@ const IBadge = ({text}) => {
 
 // ─── BETKING BUTTON ───────────────────────────────────────────────────────────
 
-const BetKingBtn = ({sport="football", size="normal", style:sx={}}) => (
+const BetKingBtn = ({size="normal", style:sx={}}) => (
   <a
-    href={BETKING_SPORT_URL(sport)}
+    href={BETKING_URL}
     target="_blank" rel="noopener noreferrer"
     onClick={e=>e.stopPropagation()}
     className={size==="sm" ? "betking-btn-sm" : ""}
     style={{
-      display:"inline-flex",alignItems:"center",gap:5,
+      display:"inline-flex",alignItems:"center",justifyContent:"center",gap:5,
       padding: size==="sm" ? "0.45rem 0.7rem" : "0.55rem 1rem",
       background:"linear-gradient(135deg,#00a651,#006b35)",
       color:"#fff",borderRadius:3,textDecoration:"none",
@@ -776,6 +771,25 @@ const BetKingBtn = ({sport="football", size="normal", style:sx={}}) => (
     }}
   >🎰 BETKING</a>
 );
+
+// Proper component for the BetKing + Track button row (fixes Rules-of-Hooks — no useState in IIFE)
+const TrackRow = ({ predId, pred, sport }) => {
+  const [tracked, setTracked] = useState(() => !!trLoad().find(p => p.id === predId));
+  const track = () => { if (trAdd(pred)) setTracked(true); };
+  return (
+    <div style={{display:"flex",gap:8,marginBottom:"1.2rem"}}>
+      <BetKingBtn style={{flex:1}}/>
+      <button onClick={track} style={{
+        flex:1, padding:"0.55rem 0.8rem", borderRadius:3, border:"1px solid",
+        borderColor:tracked?"#00a651":"#333",
+        background:tracked?"rgba(0,166,81,.1)":"transparent",
+        color:tracked?"#00a651":"#555",
+        fontSize:"0.6rem",fontWeight:900,letterSpacing:.8,
+        cursor:tracked?"default":"pointer",textTransform:"uppercase",
+      }}>{tracked?"✓ TRACKED":"+ TRACK PREDICTION"}</button>
+    </div>
+  );
+};
 
 // ─── MATCH CARD ───────────────────────────────────────────────────────────────
 
@@ -824,7 +838,7 @@ const MatchCard = React.memo(({match, featured=false, onClick}) => {
           {match?.league?.name}{country?<> · <span style={{color:"var(--teal)"}}>{country}</span></>:null}
         </div>
         <div style={{marginTop:"0.5rem"}}>
-          <BetKingBtn sport="football" size="sm" style={{width:"100%",justifyContent:"center"}}/>
+          <BetKingBtn size="sm" style={{width:"100%",justifyContent:"center"}}/>
         </div>
       </div>
 
@@ -920,34 +934,20 @@ const AnalysisPanel = ({match,onClose}) => {
         </div>
 
         {/* BetKing + Track row */}
-        {(() => {
-          const pred = {
-            id: `football_${match?.fixture?.id||Date.now()}`,
-            sport:"football", addedAt:new Date().toISOString(),
-            matchDate: match?.fixture?.date,
-            homeTeam: match?.teams?.home?.name, awayTeam: match?.teams?.away?.name,
-            league: match?.league?.name,
-            picks: { safePick:intel.safe, valuePick:intel.val, goalsPick:intel.goalsPick,
+        <TrackRow
+          predId={`football_${match?.fixture?.id}`}
+          pred={{
+            id:`football_${match?.fixture?.id}`, sport:"football",
+            addedAt:new Date().toISOString(), matchDate:match?.fixture?.date,
+            homeTeam:match?.teams?.home?.name, awayTeam:match?.teams?.away?.name,
+            league:match?.league?.name,
+            picks:{ safePick:intel.safe, valuePick:intel.val, goalsPick:intel.goalsPick,
               ahPick:intel.ah, mlScore:intel.mlScore, grade:intel.grade,
               confidence:intel.score, homeProb:intel.probs.home, awayProb:intel.probs.away, drawProb:intel.probs.draw },
-            grade: intel.grade, status:"pending",
-          };
-          const [tracked,setTracked] = React.useState(()=>!!trLoad().find(p=>p.id===pred.id));
-          const track = () => { if(trAdd(pred)) setTracked(true); };
-          return (
-            <div style={{display:"flex",gap:8,marginBottom:"1.2rem"}}>
-              <BetKingBtn sport="football" style={{flex:1,justifyContent:"center"}}/>
-              <button onClick={track} style={{
-                flex:1, padding:"0.55rem 0.8rem", borderRadius:3, border:"1px solid",
-                borderColor:tracked?"#00a651":"#333",
-                background:tracked?"rgba(0,166,81,.1)":"transparent",
-                color:tracked?"#00a651":"#555",
-                fontSize:"0.6rem",fontWeight:900,letterSpacing:.8,cursor:tracked?"default":"pointer",
-                textTransform:"uppercase",
-              }}>{tracked?"✓ TRACKED":"+ TRACK PREDICTION"}</button>
-            </div>
-          );
-        })()}
+            grade:intel.grade, status:"pending",
+          }}
+          sport="football"
+        />
 
         <p style={{fontSize:"0.58rem",color:"#444",letterSpacing:2,marginBottom:"0.4rem",fontWeight:900,textTransform:"uppercase"}}>
           {intel.metrics?.leagueCtx||match.league?.name} · {match.league?.country}
@@ -1228,34 +1228,19 @@ const BasketballAnalysisPanel = ({ gameObj, onClose }) => {
         </div>
 
         {/* BetKing + Track row */}
-        {(() => {
-          const bsktSport = isEspn ? (game._league==="WNBA"?"basketball":"basketball") : "basketball";
-          const pred = {
-            id: `bskt_${game.id||game.date||Date.now()}`,
-            sport:"basketball", addedAt:new Date().toISOString(),
-            matchDate: game.date,
-            homeTeam: intel.homeName, awayTeam: intel.awayName,
-            league: leagueTag,
-            picks: { safePick:intel.safePick, ouLabel:intel.ouLabel, grade:intel.grade,
+        <TrackRow
+          predId={`bskt_${game.id||game.date}`}
+          pred={{
+            id:`bskt_${game.id||game.date}`, sport:"basketball",
+            addedAt:new Date().toISOString(), matchDate:game.date,
+            homeTeam:intel.homeName, awayTeam:intel.awayName,
+            league:leagueTag,
+            picks:{ safePick:intel.safePick, ouLabel:intel.ouLabel, grade:intel.grade,
               confidence:intel.score, homeProb:intel.homeProb, awayProb:intel.awayProb },
-            grade: intel.grade, status:"pending",
-          };
-          const [tracked,setTracked] = React.useState(()=>!!trLoad().find(p=>p.id===pred.id));
-          const track = () => { if(trAdd(pred)) setTracked(true); };
-          return (
-            <div style={{display:"flex",gap:8,marginBottom:"1.2rem"}}>
-              <BetKingBtn sport={bsktSport} style={{flex:1,justifyContent:"center"}}/>
-              <button onClick={track} style={{
-                flex:1, padding:"0.55rem 0.8rem", borderRadius:3, border:"1px solid",
-                borderColor:tracked?"#00a651":"#333",
-                background:tracked?"rgba(0,166,81,.1)":"transparent",
-                color:tracked?"#00a651":"#555",
-                fontSize:"0.6rem",fontWeight:900,letterSpacing:.8,cursor:tracked?"default":"pointer",
-                textTransform:"uppercase",
-              }}>{tracked?"✓ TRACKED":"+ TRACK PREDICTION"}</button>
-            </div>
-          );
-        })()}
+            grade:intel.grade, status:"pending",
+          }}
+          sport="basketball"
+        />
 
         {/* League */}
         <p style={{fontSize:"0.6rem",color:"#555",letterSpacing:2,marginBottom:"0.5rem",fontWeight:900,textTransform:"uppercase"}}>
@@ -1631,7 +1616,7 @@ const NBAGameCard = React.memo(({ game, onClick }) => {
           </div>
         )}
         <div style={{marginTop:"0.5rem"}}>
-          <BetKingBtn sport="basketball" size="sm" style={{width:"100%",justifyContent:"center"}}/>
+          <BetKingBtn size="sm" style={{width:"100%",justifyContent:"center"}}/>
         </div>
       </div>
 
@@ -1803,7 +1788,7 @@ const GlobalBaskCard = React.memo(({ game, onClick }) => {
           </div>
         )}
         <div style={{marginTop:"0.5rem"}}>
-          <BetKingBtn sport="basketball" size="sm" style={{width:"100%",justifyContent:"center"}}/>
+          <BetKingBtn size="sm" style={{width:"100%",justifyContent:"center"}}/>
         </div>
       </div>
 
