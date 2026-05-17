@@ -68,10 +68,12 @@ const BSKT_DONE_ST = new Set(["FT","AOT"]);
 
 // ─── BETKING INTEGRATION ──────────────────────────────────────────────────────
 
+const BETKING_BASE = "https://m.betking.com/en-ng";
+
 const BETKING_SPORT_URL = (sport) =>
   sport === "basketball"
-    ? "https://www.betking.com/sports/s/basketball/"
-    : "https://www.betking.com/sports/s/soccer/";
+    ? `${BETKING_BASE}/sports/s/basketball/`
+    : `${BETKING_BASE}/sports/s/soccer/`;
 
 // ─── PREDICTION TRACKER (localStorage) ───────────────────────────────────────
 
