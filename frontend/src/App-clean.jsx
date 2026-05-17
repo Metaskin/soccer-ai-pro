@@ -762,14 +762,15 @@ const BetKingBtn = ({sport="football", size="normal", style:sx={}}) => (
     href={BETKING_SPORT_URL(sport)}
     target="_blank" rel="noopener noreferrer"
     onClick={e=>e.stopPropagation()}
+    className={size==="sm" ? "betking-btn-sm" : ""}
     style={{
       display:"inline-flex",alignItems:"center",gap:5,
-      padding: size==="sm" ? "3px 8px" : "0.55rem 1rem",
+      padding: size==="sm" ? "0.45rem 0.7rem" : "0.55rem 1rem",
       background:"linear-gradient(135deg,#00a651,#006b35)",
       color:"#fff",borderRadius:3,textDecoration:"none",
-      fontSize: size==="sm" ? "0.52rem" : "0.62rem",
+      fontSize: size==="sm" ? "0.6rem" : "0.62rem",
       fontWeight:900,letterSpacing:.8,textTransform:"uppercase",
-      whiteSpace:"nowrap",flexShrink:0,
+      whiteSpace:"nowrap",
       boxShadow:"0 2px 8px rgba(0,166,81,.25)",
       ...sx
     }}
@@ -909,8 +910,8 @@ const AnalysisPanel = ({match,onClose}) => {
   );
 
   return (
-    <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.88)",backdropFilter:"blur(10px)",zIndex:1000,display:"flex",justifyContent:"flex-end"}}>
-      <div onClick={e=>e.stopPropagation()} style={{width:"100%",maxWidth:520,background:"#0d0f12",height:"100%",overflowY:"auto",borderLeft:"1px solid #222",padding:"2rem",boxSizing:"border-box"}}>
+    <div onClick={onClose} className="analysis-overlay" style={{position:"fixed",inset:0,background:"rgba(0,0,0,.88)",backdropFilter:"blur(10px)",zIndex:1000,display:"flex",justifyContent:"flex-end"}}>
+      <div onClick={e=>e.stopPropagation()} className="analysis-drawer" style={{width:"100%",maxWidth:520,background:"#0d0f12",height:"100%",overflowY:"auto",borderLeft:"1px solid #222",padding:"2rem",boxSizing:"border-box"}}>
 
         {/* Header */}
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"0.8rem"}}>
@@ -1217,8 +1218,8 @@ const BasketballAnalysisPanel = ({ gameObj, onClose }) => {
   );
 
   return (
-    <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.88)",backdropFilter:"blur(10px)",zIndex:1000,display:"flex",justifyContent:"flex-end"}}>
-      <div onClick={e=>e.stopPropagation()} style={{width:"100%",maxWidth:520,background:"#0d0f12",height:"100%",overflowY:"auto",borderLeft:"1px solid #222",padding:"2rem",boxSizing:"border-box"}}>
+    <div onClick={onClose} className="analysis-overlay" style={{position:"fixed",inset:0,background:"rgba(0,0,0,.88)",backdropFilter:"blur(10px)",zIndex:1000,display:"flex",justifyContent:"flex-end"}}>
+      <div onClick={e=>e.stopPropagation()} className="analysis-drawer" style={{width:"100%",maxWidth:520,background:"#0d0f12",height:"100%",overflowY:"auto",borderLeft:"1px solid #222",padding:"2rem",boxSizing:"border-box"}}>
 
         {/* Header */}
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"0.8rem"}}>
@@ -1959,13 +1960,19 @@ const Navbar = ({onViewChange,activeView,searchValue,onSearchChange,onSearchClea
         <span style={{color:"#fff",fontWeight:900,letterSpacing:2}}>STEALTH</span>
         <span style={{color:"#d4af37",fontWeight:300}}>PREDICTION</span>
       </div>
-      <div style={{flex:1,maxWidth:400}}>
+      <div className="navbar-search">
         <SearchBar value={searchValue} onChange={onSearchChange} onClear={onSearchClear}/>
       </div>
       <div className="navbar-actions">
-        <button className={`nav-btn${activeView==="live"?" active":""}`} onClick={()=>onViewChange("live")}>Opportunities</button>
+        <button className={`nav-btn${activeView==="live"?" active":""}`} onClick={()=>onViewChange("live")}>
+          <span className="btn-label-full">Opportunities</span>
+          <span className="btn-label-short">⚽ Football</span>
+        </button>
         <button className={`nav-btn secondary${activeView==="basketball"?" active":""}`} onClick={()=>onViewChange("basketball")}>🏀 Basketball</button>
-        <button className={`nav-btn secondary${activeView==="standings"?" active":""}`} onClick={()=>onViewChange("standings")}>League Table</button>
+        <button className={`nav-btn secondary${activeView==="standings"?" active":""}`} onClick={()=>onViewChange("standings")}>
+          <span className="btn-label-full">League Table</span>
+          <span className="btn-label-short">📋 Standings</span>
+        </button>
         <button className={`nav-btn secondary${activeView==="tracker"?" active":""}`} onClick={()=>onViewChange("tracker")}
           style={{borderColor:activeView==="tracker"?"#00a651":undefined,color:activeView==="tracker"?"#00a651":undefined,position:"relative"}}>
           {pLabel}{trackerRate>0&&<span style={{fontSize:"0.5rem",color:"#00a651",marginLeft:4}}>{trackerRate}%</span>}
@@ -1978,7 +1985,7 @@ const Navbar = ({onViewChange,activeView,searchValue,onSearchChange,onSearchClea
 // ─── STATS RIBBON ─────────────────────────────────────────────────────────────
 
 const StatsRibbon = ({stats,liveCount}) => (
-  <div style={{display:"flex",gap:"2rem",padding:"0.8rem 2rem",background:"#0a0c0e",borderBottom:"1px solid #222",fontSize:"0.7rem",color:"#666",flexWrap:"wrap",width:"100%",boxSizing:"border-box"}}>
+  <div style={{display:"flex",gap:"1rem",padding:"0.6rem 1rem",background:"#0a0c0e",borderBottom:"1px solid #222",fontSize:"0.65rem",color:"#666",flexWrap:"wrap",width:"100%",boxSizing:"border-box"}}>
     <div>ROI: <span style={{color:"var(--teal)"}}>{stats.roi}</span></div>
     <div>WIN RATE: <span style={{color:"var(--teal)"}}>{stats.winRate}</span></div>
     <div>STREAK: <span style={{color:"var(--gold)"}}>{stats.streak}</span></div>
@@ -2240,7 +2247,7 @@ const TrackerView = () => {
       <h2 className="section-title premium-label">📊 PREDICTION TRACKER — AI PERFORMANCE RECORD</h2>
 
       {/* Stats banner */}
-      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:"0.8rem",marginBottom:"2rem"}}>
+      <div className="tracker-stats-grid" style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:"0.8rem",marginBottom:"2rem"}}>
         {[
           {label:"TRACKED",   val:stats.total,   color:"#fff"},
           {label:"WON",       val:stats.won,     color:"#00ff88"},
