@@ -114,10 +114,13 @@ const evalFootballPick = (pick, homeTeam, awayTeam, hs, as_) => {
   if (p.includes("DNB") && p.includes(awayTeam)) return awayWon?"won":draw?"void":"lost";
   if (p.includes("Double Chance")) return (homeWon||draw)?"won":"lost";
   if (p.includes("BTTS Yes")) return (hs>0&&as_>0)?"won":"lost";
+  // "Draw / Under 2.5" is an OR bet — wins if draw OR total < 2.5
+  if (p.includes("Draw") && p.includes("Under 2.5")) return (draw||tot<2.5)?"won":"lost";
   if (p.includes("Over 3.5")) return tot>3.5?"won":"lost";
   if (p.includes("Over 2.5")) return tot>2.5?"won":"lost";
   if (p.includes("Over 1.5")) return tot>1.5?"won":"lost";
   if (p.includes("Under 2.5")) return tot<2.5?"won":"lost";
+  if (p.includes("Under 3.5")) return tot<3.5?"won":"lost";
   if (p.includes("AH") && p.includes(homeTeam)) {
     const line = parseFloat(p.match(/-?\d+\.?\d*/)?.[0]||"0");
     const adj = homeWon ? hs-as_ : -(as_-hs);
@@ -2442,6 +2445,27 @@ function App(){
       const HOUR  = 36e5;
       const DAY7  = 7*24*HOUR;
 
+      // Resolve pending football predictions NOW, before usable filter strips FT matches
+      {
+        const pending = trLoad().filter(p => p.status === "pending" && p.sport === "football");
+        let resolvedAny = false;
+        pending.forEach(pred => {
+          const fid = parseInt(pred.id.replace("football_",""));
+          const m   = map.get(fid);
+          if (!m) return;
+          const s = m.fixture?.status?.short;
+          if (!DONE_STATUSES.has(s)) return;
+          const hs  = m?.goals?.home  ?? 0;
+          const as_ = m?.goals?.away  ?? 0;
+          const r1  = evalFootballPick(pred.picks?.safePick  ||"", pred.homeTeam, pred.awayTeam, hs, as_);
+          const r2  = evalFootballPick(pred.picks?.goalsPick ||"", pred.homeTeam, pred.awayTeam, hs, as_);
+          const result = r1!=="void" ? r1 : r2!=="void" ? r2 : "void";
+          trUpdate(pred.id, { status:result, result:{ homeScore:hs, awayScore:as_, resolvedAt:new Date().toISOString() } });
+          resolvedAny = true;
+        });
+        if (resolvedAny) setTrackerPreds(trLoad());
+      }
+
       const usable = Array.from(map.values()).filter(m=>{
         const s = m.fixture?.status?.short;
         if(!s||DONE_STATUSES.has(s)) return false;
@@ -2545,6 +2569,36 @@ function App(){
     }
   }, []);
 
+  // ── Resolve pending predictions whose matches ended while user was offline ──
+  const checkOldPendingResults = useCallback(async () => {
+    const pending = trLoad().filter(p =>
+      p.status === "pending" && p.sport === "football" && p.matchDate
+    );
+    // Only check matches where kickoff + 110 min has passed (match should be done)
+    const overdue = pending.filter(p =>
+      Date.now() > new Date(p.matchDate).getTime() + 110 * 60 * 1000
+    );
+    if (!overdue.length) return;
+
+    let resolvedAny = false;
+    await Promise.all(overdue.map(async pred => {
+      const fid  = pred.id.replace("football_","");
+      const data = await safeFetch(`/fixtures?id=${fid}`);
+      if (!data?.length) return;
+      const m = data[0];
+      const s = m?.fixture?.status?.short;
+      if (!DONE_STATUSES.has(s)) return;
+      const hs  = m?.goals?.home  ?? 0;
+      const as_ = m?.goals?.away  ?? 0;
+      const r1  = evalFootballPick(pred.picks?.safePick  ||"", pred.homeTeam, pred.awayTeam, hs, as_);
+      const r2  = evalFootballPick(pred.picks?.goalsPick ||"", pred.homeTeam, pred.awayTeam, hs, as_);
+      const result = r1!=="void" ? r1 : r2!=="void" ? r2 : "void";
+      trUpdate(pred.id, { status:result, result:{ homeScore:hs, awayScore:as_, resolvedAt:new Date().toISOString() } });
+      resolvedAny = true;
+    }));
+    if (resolvedAny) setTrackerPreds(trLoad());
+  }, []);
+
   // ── Global basketball fetch (API-Sports worldwide) ────────────────────────
   const fetchGlobalBasketball = useCallback(async () => {
     setGlobalGames(p => ({ ...p, loading: true }));
@@ -2591,7 +2645,8 @@ function App(){
     if(hasFetched.current) return;
     hasFetched.current = true;
     fetchData();
-    fetchSportsNews(); // News loads on app startup — visible immediately on any tab
+    fetchSportsNews();
+    checkOldPendingResults(); // Resolve any predictions that ended while offline
 
     const onVis = ()=>{if(!document.hidden) fetchData();};
     document.addEventListener("visibilitychange",onVis);
@@ -2600,7 +2655,7 @@ function App(){
     const tid = setInterval(()=>{if(!document.hidden) fetchData();},(hasLive()?LIVE_CACHE_MINS:SCHEDULED_CACHE_MINS)*60000);
 
     return()=>{clearInterval(tid);document.removeEventListener("visibilitychange",onVis);};
-  },[fetchData,fetchSportsNews]); // eslint-disable-line react-hooks/exhaustive-deps
+  },[fetchData,fetchSportsNews,checkOldPendingResults]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Lazy-load basketball on tab open (ESPN + global + news) ─────────────
   useEffect(() => {
@@ -2646,42 +2701,26 @@ function App(){
     return () => { clearInterval(liveTid); clearInterval(fullTid); };
   }, [basketball.data, globalGames.data, fetchBasketball, fetchGlobalBasketball, fetchLiveScoresOnly]);
 
-  // ── Auto-resolve tracked predictions from live data ───────────────────────
+  // ── Auto-resolve basketball predictions when scores update ───────────────
+  // (Football is resolved inside fetchData before the usable filter strips FT fixtures)
   useEffect(() => {
-    const pending = trLoad().filter(p => p.status === "pending");
-    if (pending.length === 0) return;
+    const pending = trLoad().filter(p => p.status === "pending" && p.sport === "basketball");
+    if (!pending.length) return;
     let changed = false;
-
     pending.forEach(pred => {
-      if (pred.sport === "football") {
-        const fixtureId = pred.id.replace("football_","");
-        const match = live.data.find(m => String(m?.fixture?.id) === fixtureId);
-        if (!match) return;
-        const s = match?.fixture?.status?.short;
-        if (!DONE_STATUSES.has(s)) return; // not finished yet
-        const hs = match?.goals?.home ?? 0;
-        const as_ = match?.goals?.away ?? 0;
-        const r1 = evalFootballPick(pred.picks?.safePick||"",  pred.homeTeam, pred.awayTeam, hs, as_);
-        const r2 = evalFootballPick(pred.picks?.goalsPick||"", pred.homeTeam, pred.awayTeam, hs, as_);
-        const mainResult = r1!=="void" ? r1 : r2!=="void" ? r2 : "void";
-        trUpdate(pred.id, { status:mainResult, result:{ homeScore:hs, awayScore:as_, resolvedAt:new Date().toISOString() } });
-        changed = true;
-      }
-      if (pred.sport === "basketball") {
-        const gameId = pred.id.replace("bskt_","");
-        const g = basketball.data.find(g => String(g.id) === gameId);
-        if (!g || g.status?.type?.state !== "post") return;
-        const homeC = g.competitions?.[0]?.competitors?.find(c=>c.homeAway==="home");
-        const awayC = g.competitions?.[0]?.competitors?.find(c=>c.homeAway==="away");
-        const hs = parseInt(homeC?.score||"0"), as_ = parseInt(awayC?.score||"0");
-        const r = evalBaskPick(pred.picks?.safePick||"", pred.homeTeam, pred.awayTeam, hs, as_);
-        trUpdate(pred.id, { status:r, result:{ homeScore:hs, awayScore:as_, resolvedAt:new Date().toISOString() } });
-        changed = true;
-      }
+      const gameId = pred.id.replace("bskt_","");
+      const g = basketball.data.find(g => String(g.id) === gameId);
+      if (!g || g.status?.type?.state !== "post") return;
+      const homeC = g.competitions?.[0]?.competitors?.find(c=>c.homeAway==="home");
+      const awayC = g.competitions?.[0]?.competitors?.find(c=>c.homeAway==="away");
+      const hs  = parseInt(homeC?.score||"0");
+      const as_ = parseInt(awayC?.score||"0");
+      const r   = evalBaskPick(pred.picks?.safePick||"", pred.homeTeam, pred.awayTeam, hs, as_);
+      trUpdate(pred.id, { status:r, result:{ homeScore:hs, awayScore:as_, resolvedAt:new Date().toISOString() } });
+      changed = true;
     });
-
     if (changed) setTrackerPreds(trLoad());
-  }, [live.data, basketball.data]);
+  }, [basketball.data]);
 
   // ── Filtered matches ───────────────────────────────────────────────────────
   const filteredMatches = useMemo(()=>{
