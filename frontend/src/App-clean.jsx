@@ -53,14 +53,15 @@ const TOP_CLUBS = [
   "Atletico Madrid","Borussia Dortmund","Ajax","Porto","Benfica","Celtic",
 ];
 
-// BACKEND_URL: localStorage override → VITE_BACKEND_URL env var → localhost fallback
-// To fix without redeploying: open app, use the in-app URL input shown in the error state
+// API routes live in /api/ (same-origin Vercel functions) on deployed site.
+// On local dev, proxy to the Express backend at localhost:5050.
+// localStorage override still works as an escape hatch.
 const LS_BACKEND_KEY = "stealth_backend_url";
-const _envBackend = (import.meta.env.VITE_BACKEND_URL || "").replace(/\/$/, "");
-const _lsBackend  = (() => { try { return (localStorage.getItem(LS_BACKEND_KEY)||"").replace(/\/$/, ""); } catch { return ""; } })();
-const BACKEND_URL = (_lsBackend || _envBackend || "http://localhost:5050");
-const IS_VERCEL   = typeof window !== "undefined" && !window.location.hostname.includes("localhost") && !window.location.hostname.includes("127.0.0.1");
-const BACKEND_MISCONFIGURED = IS_VERCEL && BACKEND_URL.includes("localhost");
+const _envBackend  = (import.meta.env.VITE_BACKEND_URL || "").replace(/\/$/, "");
+const _lsBackend   = (() => { try { return (localStorage.getItem(LS_BACKEND_KEY)||"").replace(/\/$/, ""); } catch { return ""; } })();
+const _isLocalDev  = typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
+const BACKEND_URL  = _lsBackend || _envBackend || (_isLocalDev ? "http://localhost:5050" : "");
+const BACKEND_MISCONFIGURED = false;
 
 const NBA_ELITE_TEAMS = new Set([
   "boston celtics","golden state warriors","milwaukee bucks","miami heat",
