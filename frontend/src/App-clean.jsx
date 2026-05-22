@@ -53,9 +53,12 @@ const TOP_CLUBS = [
   "Atletico Madrid","Borussia Dortmund","Ajax","Porto","Benfica","Celtic",
 ];
 
-// BACKEND_URL: set VITE_BACKEND_URL in Vercel → Frontend project → Settings → Environment Variables
-// Local dev: create frontend/.env with VITE_BACKEND_URL=http://localhost:5050
-const BACKEND_URL = (import.meta.env.VITE_BACKEND_URL || "http://localhost:5050").replace(/\/$/, "");
+// BACKEND_URL: localStorage override → VITE_BACKEND_URL env var → localhost fallback
+// To fix without redeploying: open app, use the in-app URL input shown in the error state
+const LS_BACKEND_KEY = "stealth_backend_url";
+const _envBackend = (import.meta.env.VITE_BACKEND_URL || "").replace(/\/$/, "");
+const _lsBackend  = (() => { try { return (localStorage.getItem(LS_BACKEND_KEY)||"").replace(/\/$/, ""); } catch { return ""; } })();
+const BACKEND_URL = (_lsBackend || _envBackend || "http://localhost:5050");
 const IS_VERCEL   = typeof window !== "undefined" && !window.location.hostname.includes("localhost") && !window.location.hostname.includes("127.0.0.1");
 const BACKEND_MISCONFIGURED = IS_VERCEL && BACKEND_URL.includes("localhost");
 
@@ -2208,6 +2211,73 @@ const Sidebar = ({activeFilter,onFilterChange,selectedGeo,onGeoChange,view,nbaFi
   );
 };
 
+// ─── BACKEND ERROR PANEL ─────────────────────────────────────────────────────
+
+const BackendErrorPanel = ({error, onRetry}) => {
+  const [url, setUrl] = React.useState("");
+  const [saved, setSaved] = React.useState(false);
+
+  const save = () => {
+    const trimmed = url.trim().replace(/\/$/, "");
+    if (!trimmed.startsWith("http")) return;
+    try { localStorage.setItem(LS_BACKEND_KEY, trimmed); } catch {}
+    setSaved(true);
+    setTimeout(() => window.location.reload(), 600);
+  };
+
+  const clear = () => {
+    try { localStorage.removeItem(LS_BACKEND_KEY); } catch {}
+    window.location.reload();
+  };
+
+  const stored = (() => { try { return localStorage.getItem(LS_BACKEND_KEY)||""; } catch { return ""; } })();
+
+  return (
+    <div style={{padding:"2rem",border:"1px solid #2a1a1a",borderRadius:4,background:"#0d0a0a"}}>
+      <p style={{fontSize:"1rem",fontWeight:700,color:"#ff4444",marginBottom:"1.2rem"}}>⚠️ Backend not reachable</p>
+
+      {BACKEND_MISCONFIGURED ? (
+        <>
+          <p style={{fontSize:"0.78rem",color:"#888",marginBottom:"1.5rem",lineHeight:1.6}}>
+            The frontend is pointing to <code style={{color:"#ff6b6b",background:"#1a1a1a",padding:"1px 5px",borderRadius:2}}>localhost</code> but you're on a deployed site.<br/>
+            Paste your Vercel backend URL below to fix it instantly — no redeploy needed.
+          </p>
+          <div style={{display:"flex",gap:8,marginBottom:"0.75rem",flexWrap:"wrap"}}>
+            <input
+              value={url} onChange={e=>setUrl(e.target.value)}
+              placeholder="https://your-backend.vercel.app"
+              style={{flex:1,minWidth:220,padding:"0.6rem 0.8rem",background:"#111",border:"1px solid #333",borderRadius:4,color:"#fff",fontSize:"0.8rem",outline:"none"}}
+              onKeyDown={e=>e.key==="Enter"&&save()}
+            />
+            <button onClick={save} disabled={saved}
+              style={{padding:"0.6rem 1.2rem",background:saved?"#00a651":"var(--gold)",color:"#000",border:"none",cursor:"pointer",borderRadius:4,fontWeight:700,fontSize:"0.75rem",whiteSpace:"nowrap"}}>
+              {saved?"✓ Saved — reloading…":"Save & Retry"}
+            </button>
+          </div>
+          {stored && (
+            <p style={{fontSize:"0.65rem",color:"#444",marginBottom:"0.75rem"}}>
+              Current override: <span style={{color:"#666"}}>{stored}</span>
+              <button onClick={clear} style={{marginLeft:8,background:"transparent",border:"none",color:"#ff4444",cursor:"pointer",fontSize:"0.65rem",textDecoration:"underline"}}>clear</button>
+            </p>
+          )}
+          <p style={{fontSize:"0.65rem",color:"#333",lineHeight:1.6}}>
+            Permanent fix: Vercel → Frontend project → Settings → Environment Variables →
+            add <strong style={{color:"#555"}}>VITE_BACKEND_URL</strong> = backend URL → Redeploy
+          </p>
+        </>
+      ) : (
+        <>
+          <p style={{color:"#555",fontSize:"0.8rem",marginBottom:"1.5rem",whiteSpace:"pre-wrap",lineHeight:1.6}}>{error}</p>
+          <button onClick={onRetry}
+            style={{padding:"0.7rem 1.5rem",background:"var(--gold)",color:"#000",border:"none",cursor:"pointer",borderRadius:4,fontWeight:700,fontSize:"0.8rem"}}>
+            Retry
+          </button>
+        </>
+      )}
+    </div>
+  );
+};
+
 // ─── EMPTY STATE ──────────────────────────────────────────────────────────────
 
 const EmptyState = ({geo,filter,search,onReset}) => (
@@ -2862,20 +2932,7 @@ function App(){
                 </div>
                 {live.loading ? <Spinner/> :
                  live.error   ? (
-                  <div style={{padding:"2rem",textAlign:"center",color:"#ff4444",border:"1px solid #ff4444",borderRadius:4}}>
-                    <p style={{fontSize:"1.1rem",marginBottom:"1rem"}}>⚠️ Failed to load matches</p>
-                    <p style={{color:"#666",fontSize:"0.85rem",marginBottom:"0.5rem",whiteSpace:"pre-wrap",textAlign:"left"}}>{live.error}</p>
-                    {BACKEND_MISCONFIGURED && (
-                      <p style={{color:"var(--teal)",fontSize:"0.72rem",margin:"0.5rem 0 1.5rem",lineHeight:1.6,textAlign:"left"}}>
-                        Fix: Vercel → Frontend project → Settings → Environment Variables<br/>
-                        Add <strong>VITE_BACKEND_URL</strong> = your backend Vercel URL → Redeploy
-                      </p>
-                    )}
-                    <button onClick={fetchData}
-                      style={{padding:"0.8rem 1.5rem",background:"var(--gold)",color:"#000",border:"none",cursor:"pointer",borderRadius:4,fontWeight:700}}>
-                      Retry
-                    </button>
-                  </div>
+                  <BackendErrorPanel error={live.error} onRetry={fetchData}/>
                  ) : filteredMatches.length===0 ? (
                   <EmptyState geo={selectedGeo} filter={filter} search={searchQuery} onReset={handleReset}/>
                  ) : filter==="All"&&selectedGeo==="ALL"&&!searchQuery ? (
