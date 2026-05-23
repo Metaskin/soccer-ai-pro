@@ -2212,6 +2212,22 @@ const Sidebar = ({activeFilter,onFilterChange,selectedGeo,onGeoChange,view,nbaFi
   );
 };
 
+// ─── QR CODE ─────────────────────────────────────────────────────────────────
+
+const QRCodeFooter = () => {
+  const [href, setHref] = React.useState("");
+  React.useEffect(() => { setHref(window.location.origin); }, []);
+  if (!href) return null;
+  const src = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(href)}&margin=12&color=00ff9d&bgcolor=0a0a0a`;
+  return (
+    <div className="qr-footer">
+      <p className="qr-label">Open on your phone</p>
+      <img src={src} alt="QR code to open app on mobile" className="qr-img" />
+      <p className="qr-url">{href}</p>
+    </div>
+  );
+};
+
 // ─── BACKEND ERROR PANEL ─────────────────────────────────────────────────────
 
 const BackendErrorPanel = ({error, onRetry}) => {
@@ -3165,6 +3181,7 @@ function App(){
         </div>
 
         <footer className="footer">
+          <QRCodeFooter />
           <span>© {new Date().getFullYear()} STEALTH PREDICTION · Private Institutional Intelligence</span>
         </footer>
       </ErrorBoundary>
