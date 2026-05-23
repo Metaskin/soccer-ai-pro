@@ -706,6 +706,11 @@ const getGlobalBaskIntelligence = (game) => {
   const grade = score>=82?"A+":score>=74?"A":score>=64?"B":score>=54?"C":"D";
   const trust = score>=76?"ELITE SIGNAL":"VERIFIED EDGE";
 
+  // Per-quarter projected scores (typical NBA distribution: Q1 24.4%, Q2 25.3%, Q3 25.0%, Q4 25.3%)
+  const Q_DIST = [0.244, 0.253, 0.250, 0.253];
+  const qHome  = Q_DIST.map(w => Math.round(homeExpPts * w));
+  const qAway  = Q_DIST.map(w => Math.round(awayExpPts * w));
+
   return {
     homeName, awayName, countryName, tier,
     homeProb, awayProb,
@@ -713,6 +718,8 @@ const getGlobalBaskIntelligence = (game) => {
     safePick, totalPick, ouLabel, spreadPick,
     score, grade, trust, momentum, runLabel,
     isFinal, isLive,
+    qProjections: { home: qHome, away: qAway,
+      q1Pick: homeProb>=awayProb ? `${homeName} Q1 ML` : `${awayName} Q1 ML` },
   };
 };
 
@@ -925,6 +932,60 @@ const FeaturedSection = ({title,matches,onMatchClick}) => {
 
 const AnalysisPanel = ({match,onClose}) => {
   const intel = getStealthIntelligence(match);
+
+  // Real last-5 form + H2H fetched from API (replaces hash model when available)
+  const [liveForm, setLiveForm] = React.useState(null);
+  const [liveH2H,  setLiveH2H]  = React.useState(null);
+  const [formLoading, setFormLoading] = React.useState(false);
+  const fixtureId = match?.fixture?.id;
+
+  React.useEffect(() => {
+    const homeId = match?.teams?.home?.id;
+    const awayId = match?.teams?.away?.id;
+    if (!homeId || !awayId) return;
+    let cancelled = false;
+    setLiveForm(null); setLiveH2H(null); setFormLoading(true);
+
+    const parseForm = (fixs, tid) => (fixs||[]).map(f => {
+      if (!DONE_STATUSES.has(f.fixture?.status?.short)) return null;
+      const isHome = f.teams?.home?.id === tid;
+      const gf = isHome ? (f.goals?.home??0) : (f.goals?.away??0);
+      const ga = isHome ? (f.goals?.away??0) : (f.goals?.home??0);
+      return {
+        result: gf>ga?"W":gf<ga?"L":"D",
+        score: `${gf}-${ga}`,
+        opp: ((isHome?f.teams?.away?.name:f.teams?.home?.name)||"").split(" ").pop(),
+        date: (f.fixture?.date||"").slice(0,7),
+      };
+    }).filter(Boolean).slice(0,5);
+
+    const parseH2H = (fixs) => (fixs||[]).map(f => {
+      if (!DONE_STATUSES.has(f.fixture?.status?.short)) return null;
+      const hs=f.goals?.home??0, as_=f.goals?.away??0;
+      return {
+        date: (f.fixture?.date||"").slice(0,7),
+        score: `${hs}-${as_}`,
+        winner: hs>as_?f.teams?.home?.name?.split(" ").pop()
+               :as_>hs?f.teams?.away?.name?.split(" ").pop():"Draw",
+      };
+    }).filter(Boolean).slice(0,5);
+
+    Promise.all([
+      safeFetch(`/fixtures?team=${homeId}&last=5`),
+      safeFetch(`/fixtures?team=${awayId}&last=5`),
+      safeFetch(`/fixtures?h2h=${homeId}-${awayId}&last=5`),
+    ]).then(([homeF, awayF, h2hF]) => {
+      if (cancelled) return;
+      const hf = parseForm(homeF, homeId);
+      const af = parseForm(awayF, awayId);
+      if (hf.length || af.length) setLiveForm({ home:hf, away:af });
+      const h2h = parseH2H(h2hF);
+      if (h2h.length) setLiveH2H(h2h);
+    }).catch(()=>{}).finally(()=>{ if(!cancelled) setFormLoading(false); });
+
+    return () => { cancelled = true; };
+  }, [fixtureId]);
+
   if (!match||!intel) return null;
 
   const isLive  = LIVE_STATUSES.has(match?.fixture?.status?.short);
@@ -1061,29 +1122,48 @@ const AnalysisPanel = ({match,onClose}) => {
         </div>
 
         {/* Form */}
-        <Sec title="Form History (Last 5)"/>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0.8rem"}}>
-          {[["HOME",intel.form.home],["AWAY",intel.form.away]].map(([side,results])=>(
+        <Sec title={liveForm ? "Real Form — Last 5 Matches" : `Form — Last 5 ${formLoading?"(loading…)":"(model)"}`}/>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0.8rem",marginBottom:"0.3rem"}}>
+          {[
+            ["HOME", match.teams.home.name, liveForm?.home || intel.form.home],
+            ["AWAY", match.teams.away.name, liveForm?.away || intel.form.away],
+          ].map(([side, teamName, results])=>(
             <div key={side}>
-              <div style={{fontSize:"0.52rem",color:"#444",marginBottom:6,letterSpacing:2}}>{side}</div>
-              <div style={{display:"flex",gap:4}}>
-                {results.map((r,i)=>(
-                  <span key={i} style={{
-                    width:22,height:22,borderRadius:3,display:"flex",alignItems:"center",justifyContent:"center",
-                    fontSize:"0.6rem",fontWeight:900,
-                    background:r==="W"?"rgba(0,255,136,.15)":r==="D"?"rgba(255,255,255,.06)":"rgba(255,68,68,.12)",
-                    color:r==="W"?"#00ff88":r==="D"?"#666":"#ff4444",
-                    border:`1px solid ${r==="W"?"rgba(0,255,136,.3)":r==="D"?"#222":"rgba(255,68,68,.25)"}`,
-                  }}>{r}</span>
-                ))}
+              <div style={{fontSize:"0.52rem",color:"#444",marginBottom:6,letterSpacing:2}}>
+                {side} · <span style={{color:"#333",textTransform:"none",letterSpacing:0}}>{teamName?.split(" ").slice(-1)[0]}</span>
               </div>
+              <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+                {(results||[]).map((r,i)=>{
+                  const result = typeof r==="string"?r:r.result;
+                  const tip    = typeof r==="object"?`${r.opp||""} ${r.score||""}`.trim():"";
+                  return (
+                    <span key={i} title={tip||undefined} style={{
+                      width:24,height:24,borderRadius:3,display:"flex",alignItems:"center",justifyContent:"center",
+                      fontSize:"0.62rem",fontWeight:900,cursor:tip?"help":"default",
+                      background:result==="W"?"rgba(0,255,136,.15)":result==="D"?"rgba(255,255,255,.06)":"rgba(255,68,68,.12)",
+                      color:result==="W"?"#00ff88":result==="D"?"#666":"#ff4444",
+                      border:`1px solid ${result==="W"?"rgba(0,255,136,.3)":result==="D"?"#222":"rgba(255,68,68,.25)"}`,
+                    }}>{result}</span>
+                  );
+                })}
+                {!(results||[]).length&&<span style={{fontSize:"0.6rem",color:"#333"}}>—</span>}
+              </div>
+              {liveForm && results?.length>0 && (
+                <div style={{marginTop:5,display:"flex",gap:3,flexWrap:"wrap"}}>
+                  {results.map((r,i)=>typeof r==="object"&&r.opp?(
+                    <span key={i} style={{fontSize:"0.48rem",color:"#2a2a2a",background:"#111",borderRadius:2,padding:"1px 4px"}}>
+                      {r.opp} {r.score}
+                    </span>
+                  ):null)}
+                </div>
+              )}
             </div>
           ))}
         </div>
 
         {/* H2H */}
-        <Sec title="Head-to-Head Context"/>
-        {intel.h2h.map((g,i)=>(
+        <Sec title={liveH2H ? "Real Head-to-Head (Last 5)" : "Head-to-Head (Model)"}/>
+        {(liveH2H || intel.h2h).map((g,i)=>(
           <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"0.6rem 0",borderBottom:"1px solid #111",fontSize:"0.72rem"}}>
             <span style={{color:"#444",fontSize:"0.6rem"}}>{g.date}</span>
             <span style={{color:"var(--teal)",fontWeight:700}}>{g.score}</span>
@@ -1181,12 +1261,51 @@ const AnalysisPanel = ({match,onClose}) => {
 // ─── BASKETBALL ANALYSIS PANEL ───────────────────────────────────────────────
 
 const BasketballAnalysisPanel = ({ gameObj, onClose }) => {
-  if (!gameObj) return null;
-  const { game, type } = gameObj;
+  // Hooks must come before any conditional returns (React rules of hooks)
+  const game   = gameObj?.game;
+  const isEspn = gameObj?.type === "espn";
+  const intel  = game ? (isEspn ? getBasketballIntelligence(game) : getGlobalBaskIntelligence(game)) : null;
 
-  const isEspn   = type === "espn";
-  const intel    = isEspn ? getBasketballIntelligence(game) : getGlobalBaskIntelligence(game);
-  if (!intel) return null;
+  const [bsktForm, setBsktForm] = React.useState(null);
+  const gameId = game?.id || game?.date;
+
+  React.useEffect(() => {
+    if (!game || isEspn) return; // ESPN already exposes records; only fetch for global API-Sports games
+    const homeId = game.teams?.home?.id;
+    const awayId = game.teams?.away?.id;
+    if (!homeId || !awayId) return;
+    let cancelled = false;
+    setBsktForm(null);
+
+    const parseForm = (data, tid) => (data?.response||[])
+      .filter(g => BSKT_DONE_ST.has(g.status?.short))
+      .slice(0, 5)
+      .map(g => {
+        const isH = g.teams?.home?.id === tid;
+        const gf  = isH ? (g.scores?.home?.total??0) : (g.scores?.away?.total??0);
+        const ga  = isH ? (g.scores?.away?.total??0) : (g.scores?.home?.total??0);
+        return {
+          result: gf > ga ? "W" : "L",
+          score: `${gf}-${ga}`,
+          opp: ((isH ? g.teams?.away?.name : g.teams?.home?.name)||"").split(" ").pop(),
+        };
+      });
+
+    Promise.all([
+      fetch(`${BACKEND_URL}/api/basketball/global/games?team=${homeId}&last=5`).then(r=>r.ok?r.json():{}).catch(()=>({})),
+      fetch(`${BACKEND_URL}/api/basketball/global/games?team=${awayId}&last=5`).then(r=>r.ok?r.json():{}).catch(()=>({})),
+    ]).then(([hd, ad]) => {
+      if (cancelled) return;
+      const hf = parseForm(hd, homeId);
+      const af = parseForm(ad, awayId);
+      if (hf.length || af.length) setBsktForm({ home: hf, away: af });
+    }).catch(()=>{});
+
+    return () => { cancelled = true; };
+  }, [gameId, isEspn]);
+
+  if (!gameObj || !intel) return null;
+  const { type } = gameObj;
 
   const competition = isEspn ? game.competitions?.[0] : null;
   const status   = isEspn ? game.status?.type : null;
@@ -1396,11 +1515,11 @@ const BasketballAnalysisPanel = ({ gameObj, onClose }) => {
           </div>
         )}
 
-        {/* Projected score (global only) */}
+        {/* Projected score + Q1-Q4 breakdown (global only) */}
         {!isEspn && !isFinal && (
           <div style={{marginBottom:"1.5rem"}}>
             <p style={{fontSize:"0.6rem",color:"#444",letterSpacing:2,marginBottom:"0.8rem",fontWeight:900}}>PROJECTED SCORE</p>
-            <div style={{display:"grid",gridTemplateColumns:"1fr auto 1fr",gap:8,alignItems:"center"}}>
+            <div style={{display:"grid",gridTemplateColumns:"1fr auto 1fr",gap:8,alignItems:"center",marginBottom:8}}>
               <div style={{background:"#14171c",padding:"0.8rem",borderRadius:4,textAlign:"center"}}>
                 <div style={{fontSize:"0.52rem",color:"#444",marginBottom:3}}>AWAY</div>
                 <div style={{fontSize:"1.4rem",fontWeight:900,color:"var(--gold)"}}>{intel.awayExpPts}</div>
@@ -1411,7 +1530,42 @@ const BasketballAnalysisPanel = ({ gameObj, onClose }) => {
                 <div style={{fontSize:"1.4rem",fontWeight:900,color:"var(--teal)"}}>{intel.homeExpPts}</div>
               </div>
             </div>
-            <div style={{textAlign:"center",marginTop:6,fontSize:"0.6rem",color:"#444"}}>EST. TOTAL: ~{intel.estTotal} · {intel.totalPick}</div>
+            <div style={{textAlign:"center",marginBottom:"0.8rem",fontSize:"0.6rem",color:"#444"}}>
+              EST. TOTAL: ~{intel.estTotal} · {intel.totalPick}
+            </div>
+
+            {/* Q1-Q4 projected score grid */}
+            {intel.qProjections && (
+              <>
+                <p style={{fontSize:"0.55rem",color:"#333",letterSpacing:2,marginBottom:"0.5rem",fontWeight:900,textTransform:"uppercase"}}>QUARTER SCORE PROJECTION</p>
+                <div style={{background:"#0f1114",border:"1px solid #1a1d23",borderRadius:4,padding:"0.75rem",overflowX:"auto"}}>
+                  <div style={{display:"grid",gridTemplateColumns:"2fr repeat(5,1fr)",gap:"3px 6px",fontSize:"0.55rem",textAlign:"center",minWidth:260}}>
+                    <div style={{color:"#333"}}/>
+                    {["Q1","Q2","Q3","Q4"].map(q=><div key={q} style={{color:"#555",fontWeight:900}}>{q}</div>)}
+                    <div style={{color:"#555",fontWeight:900}}>TOT</div>
+
+                    <div style={{textAlign:"left",color:"#666",overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",fontWeight:700}}>
+                      {intel.awayName.split(" ").slice(-1)[0]}
+                    </div>
+                    {intel.qProjections.away.map((v,i)=>(
+                      <div key={i} style={{color:"var(--gold)",fontWeight:700}}>{v}</div>
+                    ))}
+                    <div style={{color:"var(--gold)",fontWeight:900}}>{intel.awayExpPts}</div>
+
+                    <div style={{textAlign:"left",color:"#666",overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",fontWeight:700}}>
+                      {intel.homeName.split(" ").slice(-1)[0]}
+                    </div>
+                    {intel.qProjections.home.map((v,i)=>(
+                      <div key={i} style={{color:"var(--teal)",fontWeight:700}}>{v}</div>
+                    ))}
+                    <div style={{color:"var(--teal)",fontWeight:900}}>{intel.homeExpPts}</div>
+                  </div>
+                </div>
+                <div style={{textAlign:"center",marginTop:5,fontSize:"0.52rem",color:"#333"}}>
+                  Q1 PICK: <span style={{color:"var(--teal)",fontWeight:700}}>{intel.qProjections.q1Pick}</span>
+                </div>
+              </>
+            )}
           </div>
         )}
 
@@ -1435,6 +1589,39 @@ const BasketballAnalysisPanel = ({ gameObj, onClose }) => {
             <div style={{width:`${intel.score}%`,height:"100%",background:`linear-gradient(90deg,var(--teal),var(--gold))`,transition:"width 0.5s"}}/>
           </div>
         </div>
+
+        {/* Real form — global games only (ESPN already shows records) */}
+        {!isEspn && (bsktForm?.home?.length>0 || bsktForm?.away?.length>0) && (
+          <div style={{marginBottom:"1.5rem"}}>
+            <p style={{fontSize:"0.6rem",color:"#444",letterSpacing:2,marginBottom:"0.8rem",fontWeight:900}}>REAL FORM — LAST 5</p>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0.8rem"}}>
+              {[["AWAY", intel.awayName, bsktForm?.away], ["HOME", intel.homeName, bsktForm?.home]].map(([side, name, results])=>(
+                <div key={side}>
+                  <div style={{fontSize:"0.52rem",color:"#444",marginBottom:5,letterSpacing:2}}>
+                    {side} · <span style={{color:"#333",textTransform:"none",letterSpacing:0}}>{name?.split(" ").slice(-1)[0]}</span>
+                  </div>
+                  <div style={{display:"flex",gap:3,flexWrap:"wrap"}}>
+                    {(results||[]).map((r,i)=>(
+                      <span key={i} title={`${r.opp||""} ${r.score||""}`.trim()||undefined} style={{
+                        width:24,height:24,borderRadius:3,display:"flex",alignItems:"center",justifyContent:"center",
+                        fontSize:"0.62rem",fontWeight:900,cursor:"help",
+                        background:r.result==="W"?"rgba(0,255,136,.15)":"rgba(255,68,68,.12)",
+                        color:r.result==="W"?"#00ff88":"#ff4444",
+                        border:`1px solid ${r.result==="W"?"rgba(0,255,136,.3)":"rgba(255,68,68,.25)"}`,
+                      }}>{r.result}</span>
+                    ))}
+                    {!(results||[]).length&&<span style={{fontSize:"0.6rem",color:"#333"}}>—</span>}
+                  </div>
+                  <div style={{marginTop:4,display:"flex",gap:3,flexWrap:"wrap"}}>
+                    {(results||[]).map((r,i)=>(
+                      <span key={i} style={{fontSize:"0.48rem",color:"#2a2a2a",background:"#111",borderRadius:2,padding:"1px 4px"}}>{r.opp} {r.score}</span>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Final result */}
         {isFinal && homeScore!==null && (
