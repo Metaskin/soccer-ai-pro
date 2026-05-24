@@ -2688,23 +2688,38 @@ function App(){
       ]);
 
       // null = network/API failure; count how many calls actually failed
-      const failCount = results.filter(r => r === null).length;
+      const failCount  = results.filter(r => r === null).length;
       const totalCalls = results.length;
-      console.log(`📡 Football fetch: ${totalCalls - failCount}/${totalCalls} calls succeeded`);
+      console.log(`📡 Football fetch: ${totalCalls - failCount}/${totalCalls} API-Sports calls succeeded`);
 
-      // If ALL calls failed → backend unreachable OR API key missing/exhausted
-      if (failCount === totalCalls) {
-        let msg;
-        if (BACKEND_MISCONFIGURED) {
-          msg = "⚠️ Backend URL points to localhost but you're on a deployed site.\n\nFix: Vercel → Frontend project → Settings → Environment Variables → add VITE_BACKEND_URL = your backend Vercel URL → Redeploy.";
-        } else {
-          msg = `⚠️ No data received from the football API.\n\nPossible causes:\n1. API_SPORTS_KEY not set in Vercel backend env vars\n2. Daily API quota exhausted (free tier = 100 calls/day)\n3. Backend at "${BACKEND_URL}" is not responding\n\nFix: Vercel → Backend project → Settings → Environment Variables → add API_SPORTS_KEY → Redeploy.`;
+      // Flatten what we have (may be empty if key is expired / quota hit)
+      let allRaw = results.flatMap(r => r ?? []);
+
+      // If API-Sports returned nothing → try ESPN free soccer API as automatic fallback
+      if (!allRaw.length) {
+        try {
+          console.log("🔄 API-Sports empty — trying ESPN soccer fallback (no key needed)...");
+          const espnRes = await fetch(`${BACKEND_URL}/api/football/espn`);
+          if (espnRes.ok) {
+            const espnData = await espnRes.json();
+            const espnMatches = espnData?.response || [];
+            if (espnMatches.length > 0) {
+              allRaw = espnMatches;
+              console.log(`📡 ESPN fallback active: ${espnMatches.length} soccer matches from ${LEAGUES_ESPN?.length||17} leagues`);
+            }
+          }
+        } catch (espnErr) {
+          console.warn("⚠️ ESPN fallback failed:", espnErr.message);
         }
-        throw new Error(msg);
       }
 
-      // Flatten — skip null (failed) calls, treat them as empty
-      const allRaw = results.flatMap(r => r ?? []);
+      // If still empty after fallback → surface a helpful error
+      if (!allRaw.length) {
+        const msg = BACKEND_MISCONFIGURED
+          ? "⚠️ Backend URL points to localhost but you're on a deployed site.\n\nFix: Vercel → Frontend → Settings → Env Vars → add VITE_BACKEND_URL → Redeploy."
+          : "⚠️ No football data available.\n\nAPI-Sports subscription may have expired AND ESPN fallback failed.\n\nTo restore: add a valid API_SPORTS_KEY to Vercel Frontend env vars → Redeploy.";
+        throw new Error(msg);
+      }
 
       // Deduplicate — live version wins
       const map = new Map();
@@ -2762,10 +2777,11 @@ function App(){
         return new Date(a.fixture?.date||0)-new Date(b.fixture?.date||0);
       });
 
-      const liveCount = usable.filter(m=>LIVE_STATUSES.has(m.fixture?.status?.short)).length;
-      console.log(`✅ ${usable.length} fixtures loaded (${liveCount} live)`);
+      const liveCount   = usable.filter(m=>LIVE_STATUSES.has(m.fixture?.status?.short)).length;
+      const espnMode    = allRaw.length > 0 && allRaw.every(m=>m._source==="espn");
+      console.log(`✅ ${usable.length} fixtures loaded (${liveCount} live)${espnMode?" [ESPN mode]":""}`);
 
-      setLive({loading:false,error:null,data:usable});
+      setLive({loading:false,error:null,data:usable,espnMode});
 
       // Premier League standings
       const st = await safeFetch(`/standings?league=39&season=${season}`);
@@ -3134,6 +3150,13 @@ function App(){
                     <button key={f} className={`filter-tag${filter===f?" active":""}`} onClick={()=>setFilter(f)}>{f}</button>
                   ))}
                 </div>
+                {/* ESPN fallback notice — shown when API-Sports key is expired/exhausted */}
+                {live.espnMode && (
+                  <div style={{padding:"0.55rem 1rem",background:"rgba(255,180,0,.05)",border:"1px solid rgba(255,180,0,.12)",borderRadius:3,marginBottom:"0.8rem",display:"flex",alignItems:"center",gap:8,fontSize:"0.6rem"}}>
+                    <span style={{color:"#aa8800",fontWeight:900}}>📡 ESPN DATA</span>
+                    <span style={{color:"#444"}}>API-Sports subscription inactive — showing ESPN free feed · predictions &amp; H2H still work</span>
+                  </div>
+                )}
                 {live.loading ? <Spinner/> :
                  live.error   ? (
                   <BackendErrorPanel error={live.error} onRetry={fetchData}/>
